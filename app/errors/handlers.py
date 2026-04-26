@@ -13,9 +13,13 @@ class FileTooLargeError(HTTPException):
 
 class DurationTooLongError(HTTPException):
     def __init__(self, duration_seconds: float, max_seconds: float) -> None:
+        max_minutes = max_seconds / 60
         super().__init__(
             status_code=422,
-            detail=f"Video duration {duration_seconds:.1f}s exceeds the maximum allowed duration of {max_seconds:.1f}s.",
+            detail=(
+                f"Video duration {duration_seconds:.1f}s exceeds the maximum allowed duration "
+                f"of {max_seconds:.1f}s ({max_minutes:.1f} minute(s))."
+            ),
         )
 
 
@@ -41,7 +45,7 @@ class ResolutionTooHighError(HTTPException):
     def __init__(self, width: int, height: int) -> None:
         super().__init__(
             status_code=422,
-            detail=f"Video resolution {width}x{height} is too high to process.",
+            detail=f"Video resolution {width}x{height} exceeds the maximum supported resolution of 3840x2160.",
         )
 
 
