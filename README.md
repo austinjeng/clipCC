@@ -8,8 +8,11 @@ A cross-platform, Dockerized API that classifies video content against user-prov
 
 ## Table of Contents
 
-- [Prerequisites](#prerequisites)
-- [Quick Start](#quick-start)
+- [Setup by Platform](#setup-by-platform)
+  - [Windows](#windows)
+  - [macOS](#macos)
+  - [Linux](#linux)
+- [Your First Classification](#your-first-classification)
 - [API Reference](#api-reference)
   - [POST /api/v1/classify](#post-apiv1classify)
   - [GET /live](#get-live)
@@ -25,47 +28,188 @@ A cross-platform, Dockerized API that classifies video content against user-prov
 
 ---
 
-## Prerequisites
+## Setup by Platform
 
-You only need **Docker** and **Docker Compose**. Everything else (Python, ffmpeg, PyTorch, the CLIP model) is bundled inside the Docker image.
-
-| Requirement | Minimum Version | How to Check |
-|---|---|---|
-| Docker | 20.10+ | `docker --version` |
-| Docker Compose | 2.0+ (V2) | `docker compose version` |
-
-**Install Docker:**
-- **macOS:** [Docker Desktop for Mac](https://docs.docker.com/desktop/install/mac-install/)
-- **Windows:** [Docker Desktop for Windows](https://docs.docker.com/desktop/install/windows-install/)
-- **Linux:** [Docker Engine](https://docs.docker.com/engine/install/) + [Docker Compose plugin](https://docs.docker.com/compose/install/linux/)
+Pick your operating system and follow the steps. All three paths end at the same place: a running ClipCC server on `http://localhost:8000`.
 
 ---
 
-## Quick Start
+### Windows
 
-### 1. Clone the repository
+You have two options: **Docker** (recommended) or **native** (no Docker, no WSL2).
+
+#### Option A: Docker (Recommended)
+
+**Prerequisites:**
+- Windows 10/11 (Home, Pro, or Enterprise)
+- [Docker Desktop for Windows](https://docs.docker.com/desktop/install/windows-install/) (4.0+)
+
+Docker Desktop will enable WSL2 automatically during installation. If you're on Pro/Enterprise and prefer not to use WSL2, you can switch to the Hyper-V backend in Docker Desktop Settings > General > uncheck "Use the WSL 2 based engine."
+
+**Step 1: Install Docker Desktop**
+
+Download and run the installer from [Docker Desktop for Windows](https://docs.docker.com/desktop/install/windows-install/). Restart your computer when prompted. After restart, open Docker Desktop and wait for the engine to start (the whale icon in the system tray should stop animating).
+
+Verify installation in PowerShell:
+```powershell
+docker --version
+# Docker version 28.x.x
+docker compose version
+# Docker Compose version v2.x.x
+```
+
+**Step 2: Clone and build**
+
+```powershell
+git clone <your-repo-url>
+cd clipCC
+docker compose --profile cpu build
+```
+
+The first build takes **5-15 minutes**. It downloads Python, ffmpeg, PyTorch, OpenCLIP, and the ViT-L-14 model weights (~900 MB) — all baked into the image so there are no runtime downloads.
+
+**Step 3: Start the server**
+
+```powershell
+docker compose --profile cpu up
+```
+
+Wait for the log line:
+```
+INFO:     Uvicorn running on http://0.0.0.0:8000
+```
+
+Model loading takes **10-30 seconds** on CPU. Once you see the Uvicorn line, the server is ready.
+
+**Step 4: Verify**
+
+Open a new PowerShell window:
+```powershell
+curl http://localhost:8000/live
+# {"status":"ok"}
+
+curl http://localhost:8000/ready
+# {"status":"ready","model":"ViT-L-14","pretrained":"laion2b_s32b_b82k","device":"cpu"}
+```
+
+If `curl` is not available, use `Invoke-WebRequest`:
+```powershell
+(Invoke-WebRequest http://localhost:8000/live).Content
+(Invoke-WebRequest http://localhost:8000/ready).Content
+```
+
+**Step 5: Stop the server**
+
+```powershell
+docker compose --profile cpu down
+```
+
+You're set. Jump to [Your First Classification](#your-first-classification).
+
+---
+
+#### Option B: Native Windows (No Docker, No WSL2)
+
+Run ClipCC directly on Windows without Docker or WSL2. Suitable for development or if Docker isn't an option.
+
+**Prerequisites:**
+- Windows 10/11
+- Python 3.11+ ([python.org installer](https://www.python.org/downloads/) — check "Add Python to PATH" during install)
+- ffmpeg in your PATH
+
+**Step 1: Install ffmpeg**
+
+Via winget (built into Windows 10 1709+ and Windows 11):
+```powershell
+winget install ffmpeg
+```
+
+Or download manually from [ffmpeg.org/download](https://ffmpeg.org/download.html#build-windows), extract, and add the `bin` folder to your system PATH.
+
+Verify:
+```powershell
+ffmpeg -version
+ffprobe -version
+```
+
+**Step 2: Clone and install dependencies**
+
+```powershell
+git clone <your-repo-url>
+cd clipCC
+pip install -r requirements.txt
+```
+
+**Step 3: Start the server**
+
+Set the required environment variables and launch:
+```powershell
+$env:ALLOW_UNAUTHENTICATED = "true"
+$env:TEMP_DIR = "C:\temp\clipcc"
+$env:CLIP_CACHE_DIR = "C:\temp\clipcc_models"
+
+uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000
+```
+
+On first startup, the ViT-L-14 model weights (~900 MB) will be downloaded automatically. This is a one-time download; subsequent starts use the cached model.
+
+**Step 4: Verify**
+
+Open a new PowerShell window:
+```powershell
+curl http://localhost:8000/live
+curl http://localhost:8000/ready
+```
+
+**Step 5: Stop the server**
+
+Press `Ctrl+C` in the terminal running uvicorn.
+
+You're set. Jump to [Your First Classification](#your-first-classification).
+
+> **Note:** The native Windows path does not create a `.baked_model` metadata file (Docker creates this during build). The app falls back to downloading the default model on first startup. The default temp and cache paths (`/tmp/clipcc`, `/app/models`) are Linux paths — you **must** override them with Windows paths as shown above.
+
+---
+
+### macOS
+
+You have two options: **Docker** (recommended) or **native**.
+
+#### Option A: Docker (Recommended)
+
+**Prerequisites:**
+- macOS 12 (Monterey) or later
+- [Docker Desktop for Mac](https://docs.docker.com/desktop/install/mac-install/)
+
+**Step 1: Install Docker Desktop**
+
+Download and install from [Docker Desktop for Mac](https://docs.docker.com/desktop/install/mac-install/). Choose the correct chip variant:
+- **Apple Silicon (M1/M2/M3/M4):** "Mac with Apple chip"
+- **Intel:** "Mac with Intel chip"
+
+After installation, open Docker Desktop and wait for the engine to start (the whale icon in the menu bar should stop animating).
+
+Verify in Terminal:
+```bash
+docker --version
+# Docker version 28.x.x
+docker compose version
+# Docker Compose version v2.x.x
+```
+
+**Step 2: Clone and build**
 
 ```bash
 git clone <your-repo-url>
 cd clipCC
-```
-
-### 2. Build the Docker image (CPU)
-
-```bash
 docker compose --profile cpu build
 ```
 
-This takes **5-15 minutes** on the first build. It downloads:
-- Python 3.11 slim base image (~50 MB)
-- ffmpeg and system libraries (~100 MB)
-- PyTorch CPU (~200 MB)
-- OpenCLIP and dependencies (~100 MB)
-- ViT-L-14 model weights (~900 MB) — **baked into the image, no runtime download**
+The first build takes **5-15 minutes**. It downloads Python, ffmpeg, PyTorch, OpenCLIP, and the ViT-L-14 model weights (~900 MB) — all baked into the image so there are no runtime downloads.
 
-Subsequent builds with code-only changes are fast (cached layers).
+> **Apple Silicon note:** The image builds for `linux/arm64` and runs via Docker's Linux VM. PyTorch CPU inference works well on Apple Silicon through this layer. Native Metal/MPS acceleration is not available inside Docker — use the native option below if you want MPS.
 
-### 3. Start the server
+**Step 3: Start the server**
 
 ```bash
 docker compose --profile cpu up
@@ -76,33 +220,261 @@ Wait for the log line:
 INFO:     Uvicorn running on http://0.0.0.0:8000
 ```
 
-The model loads into memory on startup. This takes **10-30 seconds** on CPU.
+Model loading takes **10-30 seconds**. Once you see the Uvicorn line, the server is ready.
 
-### 4. Test it
+**Step 4: Verify**
 
-Open a new terminal:
-
+Open a new Terminal tab:
 ```bash
-# Check the server is alive
 curl http://localhost:8000/live
 # {"status":"ok"}
 
-# Check the model is loaded
 curl http://localhost:8000/ready
 # {"status":"ready","model":"ViT-L-14","pretrained":"laion2b_s32b_b82k","device":"cpu"}
 ```
 
-### 5. Classify a video
-
-Create a test video (or use your own .mp4):
+**Step 5: Stop the server**
 
 ```bash
-# Generate a 5-second test video with ffmpeg
+docker compose --profile cpu down
+```
+
+You're set. Jump to [Your First Classification](#your-first-classification).
+
+---
+
+#### Option B: Native macOS (No Docker)
+
+Run ClipCC directly. Useful for development or to use Apple Silicon MPS acceleration.
+
+**Prerequisites:**
+- macOS 12+
+- Python 3.11+ (via Homebrew or [python.org](https://www.python.org/downloads/))
+- ffmpeg
+
+**Step 1: Install dependencies**
+
+Using [Homebrew](https://brew.sh/) (recommended):
+```bash
+brew install python@3.11 ffmpeg
+```
+
+Or if you already have Python 3.11+ installed:
+```bash
+brew install ffmpeg
+```
+
+Verify:
+```bash
+python3 --version
+# Python 3.11.x or higher
+ffmpeg -version
+ffprobe -version
+```
+
+**Step 2: Clone and install Python packages**
+
+```bash
+git clone <your-repo-url>
+cd clipCC
+pip3 install -r requirements.txt
+```
+
+**Step 3: Start the server**
+
+```bash
+ALLOW_UNAUTHENTICATED=true \
+TEMP_DIR=/tmp/clipcc \
+CLIP_CACHE_DIR=$HOME/.cache/clipcc_models \
+uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000
+```
+
+On first startup, the ViT-L-14 model weights (~900 MB) will be downloaded automatically. Subsequent starts use the cached model.
+
+**Step 4: Verify**
+
+Open a new Terminal tab:
+```bash
+curl http://localhost:8000/live
+curl http://localhost:8000/ready
+```
+
+**Step 5: Stop the server**
+
+Press `Ctrl+C` in the terminal running uvicorn.
+
+You're set. Jump to [Your First Classification](#your-first-classification).
+
+---
+
+### Linux
+
+You have two options: **Docker** (recommended) or **native**.
+
+#### Option A: Docker (Recommended)
+
+**Prerequisites:**
+- A 64-bit Linux distribution (Ubuntu 20.04+, Debian 11+, Fedora 36+, etc.)
+- [Docker Engine](https://docs.docker.com/engine/install/) (20.10+)
+- [Docker Compose plugin](https://docs.docker.com/compose/install/linux/) (V2)
+
+**Step 1: Install Docker Engine**
+
+Follow the official guide for your distribution: [Install Docker Engine](https://docs.docker.com/engine/install/).
+
+For Ubuntu/Debian:
+```bash
+# Add Docker's official GPG key and repository (see Docker docs for latest commands)
+sudo apt-get update
+sudo apt-get install docker-ce docker-ce-cli containerd.io docker-compose-plugin
+
+# Allow running Docker without sudo (requires re-login)
+sudo usermod -aG docker $USER
+```
+
+Verify (after re-login):
+```bash
+docker --version
+# Docker version 28.x.x
+docker compose version
+# Docker Compose version v2.x.x
+```
+
+**Step 2: Clone and build**
+
+```bash
+git clone <your-repo-url>
+cd clipCC
+docker compose --profile cpu build
+```
+
+The first build takes **5-15 minutes**. It downloads Python, ffmpeg, PyTorch, OpenCLIP, and the ViT-L-14 model weights (~900 MB) — all baked into the image so there are no runtime downloads.
+
+**Step 3: Start the server**
+
+```bash
+docker compose --profile cpu up
+```
+
+Wait for the log line:
+```
+INFO:     Uvicorn running on http://0.0.0.0:8000
+```
+
+Model loading takes **10-30 seconds**. Once you see the Uvicorn line, the server is ready.
+
+**Step 4: Verify**
+
+Open a new terminal:
+```bash
+curl http://localhost:8000/live
+# {"status":"ok"}
+
+curl http://localhost:8000/ready
+# {"status":"ready","model":"ViT-L-14","pretrained":"laion2b_s32b_b82k","device":"cpu"}
+```
+
+**Step 5: Stop the server**
+
+```bash
+docker compose --profile cpu down
+```
+
+You're set. Jump to [Your First Classification](#your-first-classification).
+
+---
+
+#### Option B: Native Linux (No Docker)
+
+Run ClipCC directly. Useful for development or when Docker isn't available.
+
+**Prerequisites:**
+- Python 3.11+
+- ffmpeg and ffprobe
+
+**Step 1: Install system dependencies**
+
+Ubuntu/Debian:
+```bash
+sudo apt-get update
+sudo apt-get install python3.11 python3.11-venv python3-pip ffmpeg
+```
+
+Fedora:
+```bash
+sudo dnf install python3.11 ffmpeg
+```
+
+Arch Linux:
+```bash
+sudo pacman -S python ffmpeg
+```
+
+Verify:
+```bash
+python3 --version
+# Python 3.11.x or higher
+ffmpeg -version
+ffprobe -version
+```
+
+**Step 2: Clone and install Python packages**
+
+```bash
+git clone <your-repo-url>
+cd clipCC
+pip3 install -r requirements.txt
+```
+
+**Step 3: Start the server**
+
+```bash
+ALLOW_UNAUTHENTICATED=true \
+TEMP_DIR=/tmp/clipcc \
+CLIP_CACHE_DIR=$HOME/.cache/clipcc_models \
+uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000
+```
+
+On first startup, the ViT-L-14 model weights (~900 MB) will be downloaded automatically. Subsequent starts use the cached model.
+
+**Step 4: Verify**
+
+Open a new terminal:
+```bash
+curl http://localhost:8000/live
+curl http://localhost:8000/ready
+```
+
+**Step 5: Stop the server**
+
+Press `Ctrl+C` in the terminal running uvicorn.
+
+You're set. Continue to the next section.
+
+---
+
+## Your First Classification
+
+These commands work the same on all platforms once the server is running.
+
+### Create a test video
+
+If you have ffmpeg installed locally (native setup), or use any `.mp4` you already have:
+
+```bash
 ffmpeg -y -f lavfi -i testsrc=duration=5:size=320x240:rate=10 \
   -c:v libx264 -pix_fmt yuv420p test_video.mp4
 ```
 
-Send it to the API:
+On Windows PowerShell, use backticks for line continuation:
+```powershell
+ffmpeg -y -f lavfi -i testsrc=duration=5:size=320x240:rate=10 `
+  -c:v libx264 -pix_fmt yuv420p test_video.mp4
+```
+
+If you don't have ffmpeg locally (Docker-only setup), use any short `.mp4` file you have on your machine.
+
+### Classify with mean aggregation
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/classify \
@@ -112,7 +484,16 @@ curl -X POST http://localhost:8000/api/v1/classify \
   -F "aggregation=mean"
 ```
 
-Response:
+Windows PowerShell:
+```powershell
+curl -X POST http://localhost:8000/api/v1/classify `
+  -F "video=@test_video.mp4" `
+  -F 'labels=[\"test pattern\",\"outdoor scene\",\"person walking\"]' `
+  -F "fps=1.0" `
+  -F "aggregation=mean"
+```
+
+Expected response:
 
 ```json
 {
@@ -149,11 +530,16 @@ Response:
 }
 ```
 
-### 6. Stop the server
+### Classify with max aggregation
 
 ```bash
-docker compose --profile cpu down
+curl -X POST http://localhost:8000/api/v1/classify \
+  -F "video=@test_video.mp4" \
+  -F 'labels=["test pattern","outdoor scene","person walking"]' \
+  -F "aggregation=max"
 ```
+
+Max mode returns `peak_frame_index` and `approx_timestamp_seconds` for each label, indicating which frame produced the peak confidence.
 
 ---
 
@@ -333,7 +719,7 @@ Readiness probe. Returns `200` with model details if the model is loaded and rea
 
 ## Configuration
 
-All settings are controlled via environment variables. Set them in `docker-compose.yml`, a `.env` file, or pass them with `docker run -e`.
+All settings are controlled via environment variables. Set them in `docker-compose.yml`, a `.env` file, or pass them directly.
 
 Copy the example:
 ```bash
@@ -355,6 +741,7 @@ cp .env.example .env
 | `FFMPEG_TIMEOUT_SECONDS` | `120` | Timeout for ffmpeg/ffprobe subprocess calls |
 | `REQUEST_TIMEOUT_SECONDS` | `300` | End-to-end timeout for the entire inference pipeline per request |
 | `CLIP_CACHE_DIR` | `/app/models` | Directory where model weights are stored. Must match the build-time cache. |
+| `TEMP_DIR` | `/tmp/clipcc` | Directory for temporary upload and frame files. **Windows native users:** override to a Windows path like `C:\temp\clipcc`. |
 
 ---
 
@@ -363,10 +750,24 @@ cp .env.example .env
 ClipCC uses **fail-closed** authentication. The server will not start unless you either:
 
 1. Set an API key:
+
+   Docker (`docker-compose.yml`):
    ```yaml
    environment:
      - API_KEY=your-secret-key-here
    ```
+
+   Native (bash):
+   ```bash
+   API_KEY=your-secret-key-here uvicorn app.main:create_app --factory ...
+   ```
+
+   Native (PowerShell):
+   ```powershell
+   $env:API_KEY = "your-secret-key-here"
+   uvicorn app.main:create_app --factory ...
+   ```
+
    Then include the key in every request:
    ```bash
    curl -X POST http://localhost:8000/api/v1/classify \
@@ -376,10 +777,10 @@ ClipCC uses **fail-closed** authentication. The server will not start unless you
    ```
 
 2. Explicitly opt out (for local development only):
-   ```yaml
-   environment:
-     - ALLOW_UNAUTHENTICATED=true
-   ```
+
+   Docker: `ALLOW_UNAUTHENTICATED=true` in environment
+   Native bash: `ALLOW_UNAUTHENTICATED=true uvicorn ...`
+   Native PowerShell: `$env:ALLOW_UNAUTHENTICATED = "true"`
 
 The `/live` endpoint is always unauthenticated (for container health checks). The `/ready` endpoint respects authentication settings.
 
@@ -391,11 +792,19 @@ GPU acceleration dramatically improves inference speed (10-30x faster than CPU).
 
 ### Requirements
 
-- NVIDIA GPU with CUDA support
-- [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) installed
-- Docker configured with the `nvidia` runtime
+- **NVIDIA GPU** with CUDA support (RTX 20xx series or newer recommended)
+- **NVIDIA drivers** installed on the host
+- **NVIDIA Container Toolkit** — required for Docker GPU passthrough
 
-### Build and run with GPU
+| Platform | GPU Support |
+|---|---|
+| **Linux (Docker)** | Full support. Install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). |
+| **Windows (Docker)** | Supported via WSL2 backend. Docker Desktop automatically passes through the GPU. |
+| **Windows (Native)** | Works if CUDA-compatible PyTorch is installed: `pip install torch --index-url https://download.pytorch.org/whl/cu121` |
+| **macOS (Docker)** | Not supported. Docker on macOS runs a Linux VM without GPU passthrough. |
+| **macOS (Native)** | PyTorch MPS (Apple Silicon) may work but is untested with OpenCLIP. CPU is the safe default. |
+
+### Build and run with GPU (Docker)
 
 ```bash
 # Build with CUDA support (larger image, ~5 GB)
@@ -405,11 +814,6 @@ docker compose --profile gpu build
 docker compose --profile gpu up
 ```
 
-The GPU profile:
-- Uses `cu121` (CUDA 12.1) PyTorch wheels
-- Defaults to `MAX_CONCURRENT_REQUESTS=1` to avoid VRAM overcommit
-- Automatically reserves all available GPUs
-
 ### Verify GPU is being used
 
 ```bash
@@ -417,7 +821,7 @@ curl http://localhost:8000/ready
 # {"status":"ready","model":"ViT-L-14",...,"device":"cuda"}
 ```
 
-If `device` says `"cuda"`, GPU acceleration is active.
+If `device` says `"cuda"`, GPU acceleration is active. If it says `"cpu"`, check that NVIDIA Container Toolkit is installed and Docker can see your GPU: `docker run --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi`.
 
 ---
 
@@ -442,17 +846,30 @@ The model choice is baked into the image at build time and cannot be changed at 
 
 ## Running Tests
 
-### Without Docker (local development)
+### With Docker setup
 
+There is no in-container test runner. Tests are designed to run on your local machine.
+
+### Local test execution
+
+Install test dependencies:
 ```bash
-# Install dependencies
 pip install -r requirements.txt
 pip install pytest pytest-asyncio httpx anyio trio
+```
 
-# Run unit tests (no ffmpeg or model needed)
+Run unit tests (no ffmpeg or model download needed):
+```bash
 python -m pytest tests/test_config.py tests/test_temp_store.py tests/test_scoring.py tests/test_resource_gates.py -v
+```
 
-# Run all tests (requires ffmpeg in PATH and ~400 MB model download on first run)
+Run the full suite (requires ffmpeg in PATH; first run downloads ViT-B-32 ~400 MB for test model):
+```bash
+python -m pytest tests/ -v
+```
+
+Windows PowerShell:
+```powershell
 python -m pytest tests/ -v
 ```
 
@@ -572,18 +989,44 @@ A: It's the unscaled cosine similarity between the video frame embedding and the
 **Q: Can I use this for real-time video?**
 A: No. ClipCC is designed for offline video classification. It processes uploaded video files, not live streams.
 
-### Setup and Docker
+### Windows-Specific
+
+**Q: Do I need WSL2?**
+A: No. Docker Desktop can use the Hyper-V backend on Windows Pro/Enterprise (uncheck "Use the WSL 2 based engine" in Settings). On Windows Home, WSL2 is required for Docker but is installed automatically. You can also run ClipCC natively without Docker at all — see [Windows Option B](#option-b-native-windows-no-docker-no-wsl2).
+
+**Q: `curl` doesn't work in PowerShell. What do I do?**
+A: PowerShell has a `curl` alias that points to `Invoke-WebRequest`, which has different syntax. Either:
+- Use `curl.exe` (the real curl, included in Windows 10+): `curl.exe http://localhost:8000/live`
+- Or use PowerShell native: `(Invoke-WebRequest http://localhost:8000/live).Content`
+
+**Q: What Windows paths should I use for native setup?**
+A: Override these environment variables in PowerShell:
+```powershell
+$env:TEMP_DIR = "C:\temp\clipcc"
+$env:CLIP_CACHE_DIR = "C:\temp\clipcc_models"
+```
+The defaults (`/tmp/clipcc`, `/app/models`) are Linux paths and won't work on Windows.
+
+### macOS-Specific
+
+**Q: Does this work on Apple Silicon (M1/M2/M3/M4)?**
+A: Yes. Docker builds a `linux/arm64` image that runs well on Apple Silicon via Docker's Linux VM. For native setup, PyTorch CPU works natively on ARM. MPS (Metal) GPU acceleration is untested with OpenCLIP.
+
+**Q: Can I use GPU acceleration on Mac?**
+A: Not via Docker (macOS Docker runs a Linux VM without GPU passthrough). Native setup may work with PyTorch MPS on Apple Silicon, but this is untested with OpenCLIP. CPU performance on Apple Silicon is quite good regardless.
+
+### Linux-Specific
+
+**Q: I get "permission denied" when running Docker commands.**
+A: Add your user to the `docker` group: `sudo usermod -aG docker $USER`, then log out and back in. Or prefix commands with `sudo`.
+
+**Q: How do I set up GPU passthrough on Linux?**
+A: Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html), then restart Docker: `sudo systemctl restart docker`. Verify with: `docker run --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi`.
+
+### Docker (All Platforms)
 
 **Q: The build is taking a very long time. Is that normal?**
 A: Yes, the first build downloads ~1.3 GB of dependencies including the ViT-L-14 model weights. Subsequent builds are much faster because Docker caches the layers. Only code changes (in `app/`) trigger a rebuild of the final layers.
-
-**Q: Can I run this without Docker?**
-A: Yes, but Docker is strongly recommended for reproducibility. For local development:
-```bash
-pip install -r requirements.txt
-ALLOW_UNAUTHENTICATED=true uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000
-```
-You'll need Python 3.11+, ffmpeg in your PATH, and the model will be downloaded on first startup.
 
 **Q: How big is the Docker image?**
 A: ~2 GB for the CPU variant, ~5 GB for the GPU (CUDA) variant. Most of the size is PyTorch and the model weights.
@@ -593,17 +1036,6 @@ A: Start Docker Desktop (macOS/Windows) or the Docker service (Linux: `sudo syst
 
 **Q: I get a `torchvision` error during build. What happened?**
 A: Make sure the Dockerfile installs `torch torchvision` from the same PyTorch wheel index. The included Dockerfile already handles this correctly.
-
-### GPU
-
-**Q: How do I know if the GPU is being used?**
-A: Check the `/ready` endpoint. If `"device": "cuda"`, GPU is active. If `"device": "cpu"`, it's using CPU even though you built with the GPU profile — check that the NVIDIA Container Toolkit is installed and Docker can see your GPU (`docker run --gpus all nvidia-smi`).
-
-**Q: Can I use an AMD GPU?**
-A: Not directly. The CUDA build profile targets NVIDIA GPUs. AMD GPU support via ROCm would require a different PyTorch build and Dockerfile modifications.
-
-**Q: Why is `MAX_CONCURRENT_REQUESTS` set to 1 for GPU?**
-A: Two concurrent ViT-L-14 inference calls with 32-frame batches can exhaust VRAM on GPUs with less than 16 GB. If you have a high-VRAM GPU (24+ GB), you can safely increase this to 2.
 
 ### API Usage
 
