@@ -32,6 +32,17 @@ A cross-platform, Dockerized API that classifies video content against user-prov
 
 Pick your operating system and follow the steps. All three paths end at the same place: a running ClipCC server on `http://localhost:8000`.
 
+### Getting the source code
+
+If you received ClipCC as a zip or folder, extract it and `cd` into it. If it's hosted on a Git remote:
+
+```bash
+git clone https://github.com/your-org/clipCC.git
+cd clipCC
+```
+
+Replace the URL above with the actual repository URL provided by your team. The remaining steps assume you are inside the `clipCC` directory.
+
 ---
 
 ### Windows
@@ -58,11 +69,9 @@ docker compose version
 # Docker Compose version v2.x.x
 ```
 
-**Step 2: Clone and build**
+**Step 2: Build the image**
 
 ```powershell
-git clone <your-repo-url>
-cd clipCC
 docker compose --profile cpu build
 ```
 
@@ -85,17 +94,11 @@ Model loading takes **10-30 seconds** on CPU. Once you see the Uvicorn line, the
 
 Open a new PowerShell window:
 ```powershell
-curl http://localhost:8000/live
+curl.exe http://localhost:8000/live
 # {"status":"ok"}
 
-curl http://localhost:8000/ready
+curl.exe http://localhost:8000/ready
 # {"status":"ready","model":"ViT-L-14","pretrained":"laion2b_s32b_b82k","device":"cpu"}
-```
-
-If `curl` is not available, use `Invoke-WebRequest`:
-```powershell
-(Invoke-WebRequest http://localhost:8000/live).Content
-(Invoke-WebRequest http://localhost:8000/ready).Content
 ```
 
 **Step 5: Stop the server**
@@ -132,11 +135,9 @@ ffmpeg -version
 ffprobe -version
 ```
 
-**Step 2: Clone and install dependencies**
+**Step 2: Install dependencies**
 
 ```powershell
-git clone <your-repo-url>
-cd clipCC
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -205,11 +206,9 @@ docker compose version
 # Docker Compose version v2.x.x
 ```
 
-**Step 2: Clone and build**
+**Step 2: Build the image**
 
 ```bash
-git clone <your-repo-url>
-cd clipCC
 docker compose --profile cpu build
 ```
 
@@ -280,11 +279,9 @@ ffmpeg -version
 ffprobe -version
 ```
 
-**Step 2: Clone and install Python packages**
+**Step 2: Install Python packages**
 
 ```bash
-git clone <your-repo-url>
-cd clipCC
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -354,11 +351,9 @@ docker compose version
 # Docker Compose version v2.x.x
 ```
 
-**Step 2: Clone and build**
+**Step 2: Build the image**
 
 ```bash
-git clone <your-repo-url>
-cd clipCC
 docker compose --profile cpu build
 ```
 
@@ -432,11 +427,9 @@ ffmpeg -version
 ffprobe -version
 ```
 
-**Step 2: Clone and install Python packages**
+**Step 2: Install Python packages**
 
 ```bash
-git clone <your-repo-url>
-cd clipCC
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -515,29 +508,29 @@ curl.exe -X POST http://localhost:8000/api/v1/classify `
 
 > **PowerShell quoting:** PowerShell uses `""` to escape double quotes inside double-quoted strings. Single quotes do not support variable interpolation in PowerShell, but they also don't escape inner quotes the way bash does. The safest approach is double-quoted strings with `""` for inner quotes as shown above.
 
-Expected response:
+Example response (illustrative — exact scores vary by model, platform, and library version):
 
 ```json
 {
   "best_match": {
     "label": "test pattern",
-    "confidence": 1.0
+    "confidence": 0.98
   },
   "scores": [
     {
       "label": "test pattern",
-      "confidence": 1.0,
-      "raw_similarity": 0.3496
+      "confidence": 0.98,
+      "raw_similarity": 0.35
     },
     {
       "label": "outdoor scene",
-      "confidence": 0.0,
-      "raw_similarity": 0.1736
+      "confidence": 0.01,
+      "raw_similarity": 0.17
     },
     {
       "label": "person walking",
-      "confidence": 0.0,
-      "raw_similarity": 0.1737
+      "confidence": 0.01,
+      "raw_similarity": 0.17
     }
   ],
   "metadata": {
@@ -547,10 +540,12 @@ Expected response:
     "device": "cpu",
     "aggregation": "mean",
     "processing_time_seconds": 1.4,
-    "disclaimer": "Scores are relative to the supplied labels, not calibrated probabilities. Not suitable for safety-critical decisions."
+    "disclaimer": "Scores are relative to the supplied labels, ..."
   }
 }
 ```
+
+> **Note:** Docker users will see `"model": "ViT-L-14"`. Native users will see `"model": "ViT-B-32"` (the development fallback). The `"test pattern"` label should score highest in both cases since the test video is literally an ffmpeg test pattern.
 
 ### Classify with max aggregation
 
@@ -750,6 +745,8 @@ All settings are controlled via environment variables. There are three ways to s
 cp .env.example .env
 # Edit .env as needed
 ```
+
+> **Important for native users:** The `.env.example` file ships with Docker-friendly defaults (e.g., `CLIP_CACHE_DIR=/app/models`). If you are running natively, you **must** change the path variables to local paths. See the comments inside `.env.example` for platform-specific examples.
 
 **Native users (inline):** Pass variables directly when launching uvicorn (as shown in the platform setup sections).
 
