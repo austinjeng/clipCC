@@ -1,0 +1,39 @@
+services:
+  clipcc-cpu:
+    build:
+      context: .
+      args:
+        TORCH_VARIANT: cpu
+    ports:
+      - "8000:8000"
+    environment:
+      - MAX_FILE_SIZE_MB=500
+      - MAX_DURATION_SECONDS=300
+      - MAX_FRAMES=300
+      - DEFAULT_FPS=1.0
+      - MAX_CONCURRENT_REQUESTS=2
+      - ALLOW_UNAUTHENTICATED=true
+    profiles: ["cpu"]
+
+  clipcc-gpu:
+    build:
+      context: .
+      args:
+        TORCH_VARIANT: cu121
+    ports:
+      - "8000:8000"
+    environment:
+      - MAX_FILE_SIZE_MB=500
+      - MAX_DURATION_SECONDS=300
+      - MAX_FRAMES=300
+      - DEFAULT_FPS=1.0
+      - MAX_CONCURRENT_REQUESTS=1
+      - ALLOW_UNAUTHENTICATED=true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    profiles: ["gpu"]
