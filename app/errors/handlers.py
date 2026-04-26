@@ -71,7 +71,7 @@ class InvalidFpsError(HTTPException):
     def __init__(self, fps: float) -> None:
         super().__init__(
             status_code=422,
-            detail=f"fps value {fps} is invalid. Must be a positive number.",
+            detail=f"FPS value {fps} is invalid. Must be between 0.1 and 5.0.",
         )
 
 
