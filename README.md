@@ -137,8 +137,12 @@ ffprobe -version
 ```powershell
 git clone <your-repo-url>
 cd clipCC
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
+
+> **Note:** The virtual environment (`.venv`) keeps ClipCC's dependencies isolated from your system Python. You must activate it each time you open a new terminal before running the server.
 
 **Step 3: Start the server**
 
@@ -151,15 +155,19 @@ $env:CLIP_CACHE_DIR = "C:\temp\clipcc_models"
 uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000
 ```
 
-On first startup, the ViT-L-14 model weights (~900 MB) will be downloaded automatically. This is a one-time download; subsequent starts use the cached model.
+On first startup, the ViT-B-32 model weights (~400 MB) will be downloaded automatically. This is the development default when running outside Docker. Subsequent starts use the cached model.
+
+> **Docker vs. native model:** The Docker image bakes in the larger ViT-L-14 model (~900 MB, higher accuracy). Native setup falls back to ViT-B-32 (~400 MB, faster download, slightly lower accuracy). Both work for development and testing.
 
 **Step 4: Verify**
 
-Open a new PowerShell window:
+Open a new PowerShell window (activate the venv first: `.\.venv\Scripts\Activate.ps1`):
 ```powershell
-curl http://localhost:8000/live
-curl http://localhost:8000/ready
+curl.exe http://localhost:8000/live
+curl.exe http://localhost:8000/ready
 ```
+
+> **Important:** Always use `curl.exe` (not `curl`) in PowerShell. The bare `curl` command in PowerShell is an alias for `Invoke-WebRequest`, which has different syntax and will not work with the examples in this guide.
 
 **Step 5: Stop the server**
 
@@ -167,7 +175,7 @@ Press `Ctrl+C` in the terminal running uvicorn.
 
 You're set. Jump to [Your First Classification](#your-first-classification).
 
-> **Note:** The native Windows path does not create a `.baked_model` metadata file (Docker creates this during build). The app falls back to downloading the default model on first startup. The default temp and cache paths (`/tmp/clipcc`, `/app/models`) are Linux paths — you **must** override them with Windows paths as shown above.
+> **Note:** The native setup does not create a `.baked_model` metadata file (Docker creates this during build). The app falls back to ViT-B-32, a smaller model that downloads faster (~400 MB vs. ~900 MB for ViT-L-14). The default temp and cache paths (`/tmp/clipcc`, `/app/models`) are Linux paths — you **must** override them with Windows paths as shown above.
 
 ---
 
@@ -277,8 +285,12 @@ ffprobe -version
 ```bash
 git clone <your-repo-url>
 cd clipCC
-pip3 install -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
+
+> **Note:** The virtual environment (`.venv`) keeps ClipCC's dependencies isolated from your system Python. Modern macOS and Homebrew Python reject global `pip install` with an "externally managed environment" error — using a venv avoids this entirely. Activate it each time you open a new terminal: `source .venv/bin/activate`
 
 **Step 3: Start the server**
 
@@ -289,11 +301,13 @@ CLIP_CACHE_DIR=$HOME/.cache/clipcc_models \
 uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000
 ```
 
-On first startup, the ViT-L-14 model weights (~900 MB) will be downloaded automatically. Subsequent starts use the cached model.
+On first startup, the ViT-B-32 model weights (~400 MB) will be downloaded automatically. This is the development default when running outside Docker. Subsequent starts use the cached model.
+
+> **Docker vs. native model:** The Docker image bakes in the larger ViT-L-14 model (~900 MB, higher accuracy). Native setup falls back to ViT-B-32 (~400 MB, faster download, slightly lower accuracy). Both work for development and testing.
 
 **Step 4: Verify**
 
-Open a new Terminal tab:
+Open a new Terminal tab (activate the venv first: `source .venv/bin/activate`):
 ```bash
 curl http://localhost:8000/live
 curl http://localhost:8000/ready
@@ -423,8 +437,12 @@ ffprobe -version
 ```bash
 git clone <your-repo-url>
 cd clipCC
-pip3 install -r requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
+
+> **Note:** The virtual environment (`.venv`) keeps ClipCC's dependencies isolated from your system Python. Debian 12+, Ubuntu 23.04+, and Fedora 38+ reject global `pip install` with an "externally managed environment" error — using a venv avoids this entirely. Activate it each time you open a new terminal: `source .venv/bin/activate`
 
 **Step 3: Start the server**
 
@@ -435,11 +453,13 @@ CLIP_CACHE_DIR=$HOME/.cache/clipcc_models \
 uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000
 ```
 
-On first startup, the ViT-L-14 model weights (~900 MB) will be downloaded automatically. Subsequent starts use the cached model.
+On first startup, the ViT-B-32 model weights (~400 MB) will be downloaded automatically. This is the development default when running outside Docker. Subsequent starts use the cached model.
+
+> **Docker vs. native model:** The Docker image bakes in the larger ViT-L-14 model (~900 MB, higher accuracy). Native setup falls back to ViT-B-32 (~400 MB, faster download, slightly lower accuracy). Both work for development and testing.
 
 **Step 4: Verify**
 
-Open a new terminal:
+Open a new terminal (activate the venv first: `source .venv/bin/activate`):
 ```bash
 curl http://localhost:8000/live
 curl http://localhost:8000/ready
@@ -484,14 +504,16 @@ curl -X POST http://localhost:8000/api/v1/classify \
   -F "aggregation=mean"
 ```
 
-Windows PowerShell:
+Windows PowerShell (note: must use `curl.exe`, not `curl`):
 ```powershell
-curl -X POST http://localhost:8000/api/v1/classify `
+curl.exe -X POST http://localhost:8000/api/v1/classify `
   -F "video=@test_video.mp4" `
-  -F 'labels=[\"test pattern\",\"outdoor scene\",\"person walking\"]' `
+  -F "labels=[""test pattern"",""outdoor scene"",""person walking""]" `
   -F "fps=1.0" `
   -F "aggregation=mean"
 ```
+
+> **PowerShell quoting:** PowerShell uses `""` to escape double quotes inside double-quoted strings. Single quotes do not support variable interpolation in PowerShell, but they also don't escape inner quotes the way bash does. The safest approach is double-quoted strings with `""` for inner quotes as shown above.
 
 Expected response:
 
@@ -719,13 +741,17 @@ Readiness probe. Returns `200` with model details if the model is loaded and rea
 
 ## Configuration
 
-All settings are controlled via environment variables. Set them in `docker-compose.yml`, a `.env` file, or pass them directly.
+All settings are controlled via environment variables. There are three ways to set them depending on your setup:
 
-Copy the example:
+**Docker users:** Set variables in the `environment:` section of `docker-compose.yml` (already pre-configured with sensible defaults).
+
+**Native users (`.env` file):** Copy the example and edit. The app automatically reads `.env` from the working directory on startup:
 ```bash
 cp .env.example .env
 # Edit .env as needed
 ```
+
+**Native users (inline):** Pass variables directly when launching uvicorn (as shown in the platform setup sections).
 
 | Variable | Default | Description |
 |---|---|---|
@@ -852,8 +878,11 @@ There is no in-container test runner. Tests are designed to run on your local ma
 
 ### Local test execution
 
-Install test dependencies:
+Install test dependencies (inside your virtual environment):
 ```bash
+source .venv/bin/activate  # Linux/macOS
+# or: .\.venv\Scripts\Activate.ps1  # Windows PowerShell
+
 pip install -r requirements.txt
 pip install pytest pytest-asyncio httpx anyio trio
 ```
@@ -995,9 +1024,11 @@ A: No. ClipCC is designed for offline video classification. It processes uploade
 A: No. Docker Desktop can use the Hyper-V backend on Windows Pro/Enterprise (uncheck "Use the WSL 2 based engine" in Settings). On Windows Home, WSL2 is required for Docker but is installed automatically. You can also run ClipCC natively without Docker at all — see [Windows Option B](#option-b-native-windows-no-docker-no-wsl2).
 
 **Q: `curl` doesn't work in PowerShell. What do I do?**
-A: PowerShell has a `curl` alias that points to `Invoke-WebRequest`, which has different syntax. Either:
-- Use `curl.exe` (the real curl, included in Windows 10+): `curl.exe http://localhost:8000/live`
-- Or use PowerShell native: `(Invoke-WebRequest http://localhost:8000/live).Content`
+A: PowerShell aliases `curl` to `Invoke-WebRequest`, which has completely different syntax. Always use `curl.exe` (the real curl, included in Windows 10+) in all commands from this guide:
+```powershell
+curl.exe http://localhost:8000/live
+```
+If you see errors about parameters or missing flags, check that you typed `curl.exe`, not `curl`.
 
 **Q: What Windows paths should I use for native setup?**
 A: Override these environment variables in PowerShell:

@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     clip_cache_dir: str = "/app/models"
     temp_dir: str = "/tmp/clipcc"
 
-    model_config = {"env_prefix": ""}
+    model_config = {"env_prefix": "", "env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
     @property
     def effective_upload_concurrency(self) -> int:

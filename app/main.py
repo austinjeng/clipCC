@@ -40,7 +40,6 @@ from app.services.video import FrameExtractor, probe_video, validate_video_const
 from app.temp_store import TempStore
 
 SUPPORTED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
-BATCH_SIZE = 8
 
 DISCLAIMER_MEAN = (
     "Scores are relative to the supplied labels, not calibrated probabilities. "
@@ -232,10 +231,10 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
                     all_raw_sim: list[torch.Tensor] = []
                     all_frames = []
 
-                    for batch_start in range(0, len(frame_samples), BATCH_SIZE):
+                    for batch_start in range(0, len(frame_samples), settings.batch_size):
                         if cancel_event.is_set():
                             break
-                        batch = frame_samples[batch_start: batch_start + BATCH_SIZE]
+                        batch = frame_samples[batch_start: batch_start + settings.batch_size]
                         images = [Image.open(fs.path).convert("RGB") for fs in batch]
 
                         image_features = clip_model.encode_images(images)
