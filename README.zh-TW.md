@@ -1,5 +1,7 @@
 # ClipCC
 
+[English](README.md) | 繁體中文
+
 跨平台、Docker 化的影片分類 API，使用 [OpenCLIP](https://github.com/mlfoundations/open_clip)（ViT-L-14）對影片內容進行文字標籤比對。上傳影片檔案並提供一組描述性標籤，即可取得每個標籤與影片內容的匹配信心分數。
 
 **應用範例：** 上傳行車記錄器畫面，搭配標籤如 `"drunk driving"`、`"normal driving"`、`"distracted driving"`，API 會回傳哪個標籤最符合影片內容。

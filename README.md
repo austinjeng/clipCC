@@ -1,5 +1,7 @@
 # ClipCC
 
+English | [繁體中文](README.zh-TW.md)
+
 A cross-platform, Dockerized API that classifies video content against user-provided text labels using [OpenCLIP](https://github.com/mlfoundations/open_clip) (ViT-L-14). Upload a video file, provide a set of descriptive labels, and get back confidence scores for how well each label describes the video.
 
 **Example use case:** Upload dashcam footage with labels like `"drunk driving"`, `"normal driving"`, `"distracted driving"` and get back which label best matches the video content.
