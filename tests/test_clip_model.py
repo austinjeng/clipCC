@@ -50,3 +50,37 @@ def test_tokenize_raw(model):
     result = model.tokenize_raw(prompts)
     assert len(result) == 2
     assert all(isinstance(t, torch.Tensor) for t in result)
+
+
+from app.models.base_model import BaseModel, ScoreBatch
+
+
+def test_clip_model_is_base_model(model):
+    assert isinstance(model, BaseModel)
+    assert model.model_type == "clip"
+    assert model.max_token_length == 77
+
+
+def test_score_batch(model, dummy_images):
+    texts = ["red image", "green image", "blue image"]
+    batch = model.score_batch(dummy_images, texts)
+    assert isinstance(batch, ScoreBatch)
+    assert batch.confidence.shape == (3, 3)
+    assert batch.raw_similarity.shape == (3, 3)
+    assert batch.logits.shape == (3, 3)
+    assert batch.semantics == "clip_relative_softmax"
+    # Softmax rows should sum to ~1
+    row_sums = batch.confidence.sum(dim=-1)
+    assert torch.allclose(row_sums, torch.ones(3), atol=1e-5)
+
+
+def test_validate_prompts(model):
+    counts = model.validate_prompts(["a video of driving", "a video of parking"])
+    assert len(counts) == 2
+    assert all(0 < c <= 77 for c in counts)
+
+
+def test_validate_prompts_detects_overflow(model):
+    long_prompt = "a video of " + "very " * 100 + "long description"
+    counts = model.validate_prompts([long_prompt])
+    assert counts[0] > 77
