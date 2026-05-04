@@ -32,46 +32,65 @@ BaseModel (ABC)
 Abstract base class defining the interface:
 
 ```python
+@dataclass
+class ScoreBatch:
+    confidence: torch.Tensor      # (num_images, num_texts) — model-appropriate activation applied
+    raw_similarity: torch.Tensor  # (num_images, num_texts) — normalized cosine for diagnostics
+    logits: torch.Tensor          # (num_images, num_texts) — pre-activation scores
+    semantics: str                # "clip_relative_softmax" | "siglip2_pairwise_sigmoid"
+
 class BaseModel(ABC):
     model_type: str              # "clip" or "siglip2"
     device: str                  # "cuda" or "cpu"
     max_token_length: int        # 77 for CLIP, 64 for SigLIP2
 
     @abstractmethod
-    def encode_text(self, texts: list[str]) -> torch.Tensor: ...
-
-    @abstractmethod
     def encode_images(self, images: list[Image]) -> torch.Tensor: ...
 
     @abstractmethod
-    def compute_similarities(self, images, texts) -> tuple[torch.Tensor, float | None]: ...
-    # Returns (raw_logits, logit_scale_or_None)
-    # CLIP: logit_scale is meaningful, used for softmax scaling
-    # SigLIP2: logit_scale is None, logits go through sigmoid directly
+    def score_batch(self, images: list[Image], texts: list[str]) -> ScoreBatch: ...
+    # Each model owns its scoring pipeline end-to-end:
+    # CLIP: encode separately → scale cosine by logit_scale → softmax → ScoreBatch
+    # SigLIP2: joint forward → logits_per_image → sigmoid → ScoreBatch
+    # raw_similarity always = L2-normalized image_embeds @ text_embeds.T (diagnostic only)
 
     @abstractmethod
-    def tokenize_and_check(self, prompts: list[str], max_tokens: int) -> list[int]: ...
+    def validate_prompts(self, prompts: list[str]) -> list[int]: ...
+    # Returns token counts using UNTRUNCATED tokenization.
+    # Raises or returns counts > max_token_length so caller can reject.
+
+    @abstractmethod
+    def tokenize_for_inference(self, prompts: list[str]) -> Any: ...
+    # Returns model-ready tokenized inputs (truncated/padded per model requirements).
 
     @abstractmethod
     def tokenize_raw(self, prompts: list[str]) -> list[torch.Tensor]: ...
+    # For duplicate-token-sequence detection. Returns normalized, model-visible token IDs.
+    # SigLIP2: lowercased text before tokenization (matching inference behavior).
 ```
 
 #### `ClipModel` (app/models/clip_model.py)
 
-Refactored to extend `BaseModel`. Sets `model_type = "clip"`, `max_token_length = 77`. Internal logic unchanged.
+Refactored to extend `BaseModel`. Sets `model_type = "clip"`, `max_token_length = 77`.
+
+- **`score_batch`:** Encodes text/images separately via open_clip, computes `cosine = image_feats @ text_feats.T`, scales by `logit_scale`, applies softmax. Also stores unscaled cosine as `raw_similarity`. Returns `ScoreBatch(semantics="clip_relative_softmax")`.
+- **`validate_prompts`:** Same as current `tokenize_and_check` — uses `tokenizer.encode()` to get raw untruncated count.
+- **`tokenize_raw`:** Unchanged — returns full token tensors for duplicate detection.
 
 #### `SigLip2Model` (app/models/siglip2_model.py)
 
 New implementation using HuggingFace transformers:
 
-- **Loading:** `AutoModel.from_pretrained(hf_repo)` + `AutoProcessor.from_pretrained(hf_repo)` with `cache_dir` pointing to Docker volume
-- **`encode_text`:** Processor tokenizes with `padding="max_length"`, `max_length=64`, `truncation=True`. Then `model.get_text_features()`, L2-normalized.
-- **`encode_images`:** Processor handles resize/normalize. Then `model.get_image_features()`, L2-normalized.
-- **`compute_similarities`:** Encodes text and images separately via `get_text_features()` / `get_image_features()`, L2-normalizes both, computes `image_features @ text_features.T` for raw cosine similarity. Returns `(cosine_sim, None)` — no logit_scale, caller uses sigmoid.
-- **`tokenize_and_check`:** Uses the processor's tokenizer to encode, checks against 64-token limit.
-- **`tokenize_raw`:** Tokenizes each prompt individually, returns tensor list.
+- **Loading:** `AutoModel.from_pretrained(hf_repo)` + `AutoProcessor.from_pretrained(hf_repo)` with `cache_dir` pointing to Docker volume.
+- **`score_batch`:** Uses `model.forward(**processor(text=texts, images=images, padding="max_length", max_length=64, truncation=True, return_tensors="pt"))`. Takes `outputs.logits_per_image` as logits (these include learned scale/bias). Applies `torch.sigmoid(logits)` for confidence. Separately computes `raw_similarity` from L2-normalized `outputs.image_embeds @ outputs.text_embeds.T` (diagnostic cosine only). Returns `ScoreBatch(semantics="siglip2_pairwise_sigmoid")`.
+- **`encode_images`:** Processor handles resize/normalize, then `model.get_image_features()`, L2-normalized. Used for batched frame-level scoring where text features are precomputed.
+- **`validate_prompts`:** Tokenizes with `truncation=False`, `padding=False` to get true token count. Compares against `max_token_length=64`. Does NOT use processor's default truncating mode — overflow is detected, not hidden.
+- **`tokenize_for_inference`:** Tokenizes with `padding="max_length"`, `max_length=64`, `truncation=True` — the required SigLIP2 inference format.
+- **`tokenize_raw`:** Lowercases text first (matching SigLIP2 normalization), then tokenizes without truncation. Returns model-visible token IDs for duplicate detection.
 - Sets `model_type = "siglip2"`, `max_token_length = 64`.
-- Uses `torch.inference_mode()` and `torch.autocast("cuda")` on GPU, matching ClipModel patterns.
+- Uses `torch.inference_mode()` and `torch.autocast("cuda")` on GPU.
+
+**Batched frame scoring path:** For video frames, text features are precomputed once. Per-batch: `encode_images(batch)` → then use `model.forward()` with precomputed text inputs + new image inputs to get proper `logits_per_image`. This preserves the learned scale/bias rather than falling back to raw cosine.
 
 ### Model Manager (app/models/model_manager.py)
 
@@ -85,12 +104,22 @@ class ModelConfig:
     params: str                 # "0.4B"
     resolution: int | str       # 256, 384, or "adaptive" for NaFlex
 
+class ModelLease:
+    """Short-lived reference to the active model. Prevents unload while in use."""
+    model: BaseModel
+    _manager: ModelManager
+    # Used as async context manager:
+    # async with manager.acquire() as lease:
+    #     lease.model.score_batch(...)
+
 class ModelManager:
     registry: dict[str, ModelConfig]
     active_model: BaseModel | None
     active_model_id: str | None
     cache_dir: str
-    _lock: asyncio.Lock
+    _swap_lock: asyncio.Lock          # Exclusive during load/unload
+    _active_leases: int               # Count of in-flight requests holding a model reference
+    _leases_drained: asyncio.Event    # Signaled when _active_leases drops to 0
 ```
 
 **Registry — hardcoded SigLIP2 models:**
@@ -104,41 +133,56 @@ class ModelManager:
 | `siglip2-so400m-patch14-384` | `google/siglip2-so400m-patch14-384` | 1B | 384 |
 | `siglip2-so400m-patch16-512` | `google/siglip2-so400m-patch16-512` | 1B | 512 |
 
+**`acquire()` → ModelLease (async context manager):**
+
+1. Await `_swap_lock` is NOT held (non-exclusive check)
+2. Increment `_active_leases`
+3. Yield `ModelLease` with reference to current `active_model`
+4. On exit: decrement `_active_leases`, signal `_leases_drained` if count hits 0
+5. If no model loaded, raise immediately (503)
+6. Wrapped in `asyncio.wait_for(settings.request_timeout_seconds)` so lease acquisition respects the documented timeout
+
 **`load_model(model_id)` flow:**
 
 1. Validate `model_id` exists in registry
 2. If already loaded, no-op and return
-3. Acquire exclusive `_lock`
-4. Unload current model (`del` + `torch.cuda.empty_cache()`)
-5. Instantiate `SigLip2Model` with config (downloads to `cache_dir` if not cached)
-6. Set `active_model` and `active_model_id`
-7. Release lock
+3. Acquire exclusive `_swap_lock` (new requests calling `acquire()` will queue here)
+4. Wait for `_leases_drained` (existing in-flight requests finish naturally)
+5. Unload current model (`del` + `torch.cuda.empty_cache()`)
+6. Instantiate `SigLip2Model` with config (downloads to `cache_dir` if not cached)
+7. Set `active_model` and `active_model_id`
+8. Release `_swap_lock` (queued requests proceed with new model)
 
-**`list_models()`** returns registry entries with a `loaded: bool` flag and `cached: bool` (weights exist on disk).
+**`list_models()`** returns registry entries with `loaded: bool` and `cached: bool` (weights exist on disk).
 
-**Startup:** Auto-loads `siglip2-base-patch16-256` during FastAPI lifespan.
+**Startup behavior:**
+
+- FastAPI lifespan completes immediately — no blocking download
+- `/live` returns 200 always (process is healthy)
+- `/ready` returns 503 until a model is loaded
+- Background task (`asyncio.create_task`) attempts to load `siglip2-base-patch16-256` after startup
+- If HuggingFace is unreachable, background task logs error and retries with backoff; app remains live
+- UI shows "Loading default model..." state on first page load
 
 ### Scoring Adaptation (app/services/scoring.py)
 
+Scoring is now model-owned. Each model's `score_batch()` returns a `ScoreBatch` with confidence already computed using the correct activation function. The scoring service receives `ScoreBatch` objects and only handles aggregation (mean/max across frames):
+
 ```python
-def compute_frame_scores(
-    cosine_sim: torch.Tensor,
-    logit_scale: float | None,    # None for SigLIP2
-) -> tuple[torch.Tensor, torch.Tensor]:
-    raw_similarity = cosine_sim.clone()
-
-    if logit_scale is not None:
-        # CLIP: scale then softmax across labels
-        scaled_logits = cosine_sim * logit_scale
-        confidence = torch.softmax(scaled_logits, dim=-1)
-    else:
-        # SigLIP2: sigmoid (independent per-pair)
-        confidence = torch.sigmoid(cosine_sim)
-
-    return confidence, raw_similarity
+def aggregate_frame_scores(
+    batches: list[ScoreBatch],
+    labels: list[str],
+    frames: list[FrameSample],
+    aggregation: str,
+) -> tuple[list[ScoreItem], BestMatch]:
+    # Stack confidence tensors from all batches
+    all_confidence = torch.cat([b.confidence for b in batches], dim=0)
+    all_raw_sim = torch.cat([b.raw_similarity for b in batches], dim=0)
+    # Delegate to aggregate_mean or aggregate_max (unchanged logic)
+    ...
 ```
 
-The `logit_scale` parameter flows from `BaseModel.compute_similarities()` through the pipeline. CLIP returns a float, SigLIP2 returns `None`.
+The scoring service no longer decides softmax vs sigmoid — that decision lives in the model implementation where it belongs. `ScoreBatch.semantics` is passed through to the response metadata so API consumers know the confidence interpretation.
 
 ### API Changes
 
@@ -152,19 +196,27 @@ GET  /api/v1/models/active  → current model info or 404 if none loaded
 
 #### Modified Endpoints
 
-- **`GET /ready`** — returns active model info from ModelManager
-- **`POST /api/v1/classify`** — uses `model.max_token_length` for token validation (not hardcoded 77). Passes `logit_scale` (or `None`) to scoring service.
+- **`GET /live`** — always 200 (process healthy, no model dependency)
+- **`GET /ready`** — 200 with active model info if loaded, 503 if no model loaded yet
+- **`POST /api/v1/classify`** — acquires a `ModelLease` via `manager.acquire()`. Uses `lease.model.max_token_length` for validation, `lease.model.validate_prompts()` for token overflow detection, `lease.model.score_batch()` for scoring. Lease released when request completes.
 
 #### Behavior During Model Swap
 
-Requests arriving during a model load queue on the `asyncio.Lock`. They wait rather than getting 503. If the wait exceeds `request_timeout_seconds`, the existing timeout handling applies.
+1. New requests calling `manager.acquire()` queue on `_swap_lock`
+2. In-flight requests (holding leases) complete naturally
+3. Once all leases drain, old model is freed and new model loads
+4. Queued requests resume with the new model
+
+If a request waits longer than `request_timeout_seconds` for a lease (because a swap is in progress), `asyncio.wait_for` raises `TimeoutError` → mapped to existing `InferenceTimeoutError`.
 
 #### Response Schema
 
-`ClassifyResponse` unchanged. One addition to `ClassifyMetadata`:
+`ClassifyResponse` unchanged. Additions to `ClassifyMetadata`:
 
 ```python
-model_type: str  # "clip" or "siglip2" — so consumers know confidence semantics
+model_type: str       # "clip" or "siglip2"
+score_semantics: str  # "clip_relative_softmax" or "siglip2_pairwise_sigmoid"
+                      # Tells consumers whether confidences sum to 1 or are independent
 ```
 
 ### UI (app/static/index.html)
@@ -212,22 +264,65 @@ Single static HTML file served at `GET /`. Plain HTML + vanilla JS, no dependenc
 - Keep `open-clip-torch` in requirements (ClipModel fallback)
 - Default `CMD` unchanged
 
-#### docker-compose.yml (new)
+#### docker-compose.yml (modify existing, not replace)
+
+Extend existing CPU/GPU profiles with model-cache volume and new env var:
 
 ```yaml
 services:
-  clipcc:
-    build: .
+  clipcc-cpu:
+    build:
+      context: .
+      args:
+        TORCH_VARIANT: cpu
     ports:
       - "8000:8000"
     volumes:
       - clipcc-models:/app/models
     environment:
+      - MAX_FILE_SIZE_MB=500
+      - MAX_DURATION_SECONDS=300
+      - MAX_FRAMES=300
+      - DEFAULT_FPS=1.0
+      - MAX_CONCURRENT_REQUESTS=2
       - ALLOW_UNAUTHENTICATED=true
+      - DEFAULT_MODEL_ID=siglip2-base-patch16-256
+    profiles: ["cpu"]
+
+  clipcc-gpu:
+    build:
+      context: .
+      args:
+        TORCH_VARIANT: cu121
+    ports:
+      - "8000:8000"
+    volumes:
+      - clipcc-models:/app/models
+    environment:
+      - MAX_FILE_SIZE_MB=500
+      - MAX_DURATION_SECONDS=300
+      - MAX_FRAMES=300
+      - DEFAULT_FPS=1.0
+      - MAX_CONCURRENT_REQUESTS=1
+      - ALLOW_UNAUTHENTICATED=true
+      - DEFAULT_MODEL_ID=siglip2-so400m-patch14-384
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    profiles: ["gpu"]
 
 volumes:
   clipcc-models:
 ```
+
+Changes from existing compose:
+- Added `clipcc-models` named volume to both services
+- Added `DEFAULT_MODEL_ID` env var (larger default for GPU, smaller for CPU)
+- Preserved all existing env vars, build args, GPU reservations, and profiles
 
 Models download to `/app/models` on first load. Volume persists across container restarts.
 
@@ -249,7 +344,7 @@ sentencepiece
 | `app/services/scoring.py` | **Modify** — sigmoid branch |
 | `app/main.py` | **Modify** — ModelManager, new endpoints, static file serving |
 | `app/schemas/response.py` | **Modify** — add model_type to metadata |
-| `app/config.py` | **Modify** — add default_model_id setting |
+| `app/config.py` | **Modify** — add `default_model_id` setting (env: `DEFAULT_MODEL_ID`) |
 | `app/static/index.html` | **Create** — UI |
 | `requirements.txt` | **Modify** — add transformers, sentencepiece |
 | `Dockerfile` | **Modify** — remove bake step |
