@@ -14,14 +14,8 @@ RUN pip install --no-cache-dir torch torchvision --index-url https://download.py
 
 COPY app/ app/
 
-ARG MODEL_NAME=ViT-L-14
-ARG PRETRAINED=laion2b_s32b_b82k
-
 ENV CLIP_CACHE_DIR=/app/models
-
-RUN python -c "import json, open_clip; \
-open_clip.create_model_and_transforms('${MODEL_NAME}', pretrained='${PRETRAINED}', cache_dir='/app/models'); \
-json.dump({'model_name': '${MODEL_NAME}', 'pretrained': '${PRETRAINED}', 'cache_dir': '/app/models'}, open('/app/.baked_model', 'w'))"
+RUN mkdir -p /app/models
 
 EXPOSE 8000
 

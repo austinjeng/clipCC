@@ -6,6 +6,8 @@ services:
         TORCH_VARIANT: cpu
     ports:
       - "8000:8000"
+    volumes:
+      - clipcc-models:/app/models
     environment:
       - MAX_FILE_SIZE_MB=500
       - MAX_DURATION_SECONDS=300
@@ -13,6 +15,7 @@ services:
       - DEFAULT_FPS=1.0
       - MAX_CONCURRENT_REQUESTS=2
       - ALLOW_UNAUTHENTICATED=true
+      - DEFAULT_MODEL_ID=siglip2-base-patch16-256
     profiles: ["cpu"]
 
   clipcc-gpu:
@@ -22,6 +25,8 @@ services:
         TORCH_VARIANT: cu121
     ports:
       - "8000:8000"
+    volumes:
+      - clipcc-models:/app/models
     environment:
       - MAX_FILE_SIZE_MB=500
       - MAX_DURATION_SECONDS=300
@@ -29,6 +34,7 @@ services:
       - DEFAULT_FPS=1.0
       - MAX_CONCURRENT_REQUESTS=1
       - ALLOW_UNAUTHENTICATED=true
+      - DEFAULT_MODEL_ID=siglip2-so400m-patch14-384
     deploy:
       resources:
         reservations:
@@ -37,3 +43,6 @@ services:
               count: all
               capabilities: [gpu]
     profiles: ["gpu"]
+
+volumes:
+  clipcc-models:
