@@ -169,43 +169,64 @@ async def acquire(self, timeout: float):
 
 async def load_model(self, model_id: str) -> None:
     config = self.registry[model_id]  # KeyError if invalid
-    if self.active_model_id == model_id:
-        return
 
+    # Phase 1: Acquire swap rights (serializes concurrent load calls)
     async with self._condition:
+        # Wait if another load is already in progress
+        await self._condition.wait_for(lambda: not self._swapping)
+        # Re-check after wait — another load may have loaded our target
+        if self.active_model_id == model_id:
+            return
+        # Claim swap — blocks new acquire() calls
         self._swapping = True
-        self._condition.notify_all()  # Wake acquire() waiters so they re-check
+        self._condition.notify_all()
+        # Wait for in-flight leases to drain
         await self._condition.wait_for(lambda: self._active_leases == 0)
+        # Clear active model reference so CUDA memory can actually be freed
+        old_model = self.active_model
+        self.active_model = None
+        self.active_model_id = None
 
-    # Outside condition lock: safe to do slow I/O (download, GPU load)
-    old_model = self.active_model
-    del old_model
-    torch.cuda.empty_cache()
-    new_model = SigLip2Model(config, cache_dir=self.cache_dir)
+    # Phase 2: Slow I/O outside condition (download, GPU load)
+    try:
+        del old_model
+        torch.cuda.empty_cache()
+        new_model = SigLip2Model(config, cache_dir=self.cache_dir)
+    except Exception:
+        # Recovery: clear swap flag so requests aren't blocked forever
+        async with self._condition:
+            self._swapping = False
+            self._condition.notify_all()
+        raise
 
+    # Phase 3: Install new model
     async with self._condition:
         self.active_model = new_model
         self.active_model_id = model_id
         self._swapping = False
-        self._condition.notify_all()  # Wake all queued acquire() calls
+        self._condition.notify_all()
 ```
 
 **Key properties:**
 
-- **No stale flags:** `wait_for(lambda)` always evaluates current state — no event to forget to clear/set
-- **Concurrent reads:** Multiple requests hold leases simultaneously (condition released after increment)
-- **Exclusive swap:** `_swapping = True` blocks new leases; `wait_for(leases == 0)` waits for in-flight to drain
-- **No lock held during inference:** Condition is released before `yield ModelLease`
-- **Timeout respected:** `asyncio.timeout(timeout)` wraps the entire acquire, including the wait_for
+- **Single-flight:** `wait_for(not swapping)` at entry serializes concurrent load requests. Second caller waits until first completes, then re-checks if target is already loaded.
+- **Failure recovery:** `try/except` around slow I/O clears `_swapping` on any error (network, CUDA OOM, HF download failure). Requests resume with 503 (no model loaded) rather than hanging forever.
+- **Proper unload:** `self.active_model = None` under the condition before `del old_model` — actually drops the reference so CUDA memory is freed before allocating the new model.
+- **No stale flags:** `wait_for(lambda)` always evaluates live state.
+- **Concurrent reads:** Multiple requests hold leases simultaneously (condition released after increment).
+- **No lock held during inference:** Condition released before `yield ModelLease`.
+- **Timeout respected:** `asyncio.timeout(timeout)` wraps the entire acquire, including wait_for.
 
 **`load_model` flow summarized:**
 
-1. Validate `model_id` in registry
-2. No-op if already loaded
-3. Set `_swapping = True` under condition (new `acquire()` calls will wait)
-4. Wait for `_active_leases == 0` (in-flight requests complete naturally)
-5. Release condition, do slow work: unload old model, download/load new model
-6. Re-acquire condition, set `active_model`, clear `_swapping`, notify all
+1. Wait for `not _swapping` (serializes with other load calls)
+2. Re-check if target already loaded (another load may have done it)
+3. Set `_swapping = True`, notify (blocks new leases)
+4. Wait for `_active_leases == 0` (in-flight requests drain)
+5. Clear `self.active_model` reference under condition
+6. Release condition — do slow work: free GPU, download/load new model
+7. On failure: clear `_swapping`, notify, re-raise (requests get 503)
+8. On success: set new `active_model`, clear `_swapping`, notify all
 
 **`list_models()`** returns registry entries with `loaded: bool` and `cached: bool` (weights exist on disk).
 
