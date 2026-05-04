@@ -24,6 +24,8 @@ class ClassifyMetadata(BaseModel):
     aggregation: str
     processing_time_seconds: float
     disclaimer: str
+    model_type: str = ""
+    score_semantics: str = ""
 
 
 class ClassifyResponse(BaseModel):
