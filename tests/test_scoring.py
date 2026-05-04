@@ -1,7 +1,8 @@
 import torch
 import pytest
 from pathlib import Path
-from app.services.scoring import compute_frame_scores, aggregate_mean, aggregate_max, build_response_scores
+from app.services.scoring import compute_frame_scores, aggregate_mean, aggregate_max, build_response_scores, aggregate_frame_scores
+from app.models.base_model import ScoreBatch
 from app.services.video import FrameSample
 
 def make_frame(index: int, fps: float = 1.0) -> FrameSample:
@@ -60,3 +61,46 @@ def test_build_response_max():
     scores, best = build_response_scores(conf, raw, ["a", "b"], frames, "max")
     assert best.label == "a"
     assert scores[0].peak_frame_index == 1
+
+
+def test_aggregate_frame_scores_mean():
+    batch1 = ScoreBatch(
+        confidence=torch.tensor([[0.8, 0.1, 0.1], [0.6, 0.2, 0.2]]),
+        raw_similarity=torch.tensor([[0.5, 0.3, 0.2], [0.4, 0.3, 0.3]]),
+        logits=torch.tensor([[2.0, -1.0, -1.0], [1.0, -0.5, -0.5]]),
+        semantics="clip_relative_softmax",
+    )
+    frames = [
+        FrameSample(path=Path("/tmp/f1.jpg"), sample_index=0, approx_timestamp_seconds=0.0),
+        FrameSample(path=Path("/tmp/f2.jpg"), sample_index=1, approx_timestamp_seconds=1.0),
+    ]
+    labels = ["cat", "dog", "bird"]
+
+    scores, best = aggregate_frame_scores([batch1], labels, frames, "mean")
+    assert len(scores) == 3
+    assert best.label == "cat"
+    assert best.confidence > 0
+
+
+def test_aggregate_frame_scores_max():
+    batch1 = ScoreBatch(
+        confidence=torch.tensor([[0.3, 0.9, 0.1]]),
+        raw_similarity=torch.tensor([[0.2, 0.7, 0.1]]),
+        logits=torch.tensor([[0.0, 2.0, -1.0]]),
+        semantics="siglip2_pairwise_sigmoid",
+    )
+    batch2 = ScoreBatch(
+        confidence=torch.tensor([[0.8, 0.2, 0.1]]),
+        raw_similarity=torch.tensor([[0.6, 0.1, 0.05]]),
+        logits=torch.tensor([[1.5, -0.5, -1.0]]),
+        semantics="siglip2_pairwise_sigmoid",
+    )
+    frames = [
+        FrameSample(path=Path("/tmp/f1.jpg"), sample_index=0, approx_timestamp_seconds=0.0),
+        FrameSample(path=Path("/tmp/f2.jpg"), sample_index=1, approx_timestamp_seconds=1.0),
+    ]
+    labels = ["cat", "dog", "bird"]
+
+    scores, best = aggregate_frame_scores([batch1, batch2], labels, frames, "max")
+    assert len(scores) == 3
+    assert best.label == "dog"

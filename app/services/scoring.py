@@ -52,3 +52,16 @@ def build_response_scores(
     best = max(scores, key=lambda s: s.confidence)
     best_match = BestMatch(label=best.label, confidence=best.confidence)
     return scores, best_match
+
+
+def aggregate_frame_scores(
+    batches: list["ScoreBatch"],
+    labels: list[str],
+    frames: list[FrameSample],
+    aggregation: str,
+) -> tuple[list[ScoreItem], BestMatch]:
+    from app.models.base_model import ScoreBatch
+
+    all_confidence = torch.cat([b.confidence for b in batches], dim=0)
+    all_raw_sim = torch.cat([b.raw_similarity for b in batches], dim=0)
+    return build_response_scores(all_confidence, all_raw_sim, labels, frames, aggregation)
