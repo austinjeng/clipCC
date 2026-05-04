@@ -152,5 +152,17 @@ class RequestGateMiddleware:
                 )
             return
 
+        # /api/v1/models*: auth required, no body size or concurrency gates
+        if path.startswith("/api/v1/models"):
+            if not self._check_auth(scope):
+                await _send_json_response(
+                    send,
+                    401,
+                    {"detail": "Invalid or missing API key. Provide a valid key in the X-API-Key header."},
+                )
+                return
+            await self._app(scope, receive, send)
+            return
+
         # All other paths: pass through
         await self._app(scope, receive, send)
