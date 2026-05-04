@@ -123,9 +123,9 @@ class ModelManager:
     active_model: BaseModel | None
     active_model_id: str | None
     cache_dir: str
-    _swap_lock: asyncio.Lock          # Exclusive during load/unload
+    _condition: asyncio.Condition     # Guards all mutable state below
+    _swapping: bool                   # True while a model load/unload is in progress
     _active_leases: int               # Count of in-flight requests holding a model reference
-    _leases_drained: asyncio.Event    # Signaled when _active_leases drops to 0
 ```
 
 **Registry — hardcoded SigLIP2 models:**
@@ -139,49 +139,73 @@ class ModelManager:
 | `siglip2-so400m-patch14-384` | `google/siglip2-so400m-patch14-384` | 1B | 384 |
 | `siglip2-so400m-patch16-512` | `google/siglip2-so400m-patch16-512` | 1B | 512 |
 
-**`acquire()` → ModelLease (async context manager):**
+**Concurrency model — `asyncio.Condition` state machine:**
 
-Lease acquisition must be atomic with respect to `_swap_lock` to prevent a race where `load_model` acquires the lock between the "is lock free?" check and the lease increment:
+All mutable state (`_swapping`, `_active_leases`, `active_model`) is guarded by a single `asyncio.Condition`. No separate events or locks — eliminates stale-flag bugs entirely.
 
 ```python
-async def acquire(self, timeout: float) -> AsyncContextManager[ModelLease]:
-    async with asyncio.wait_for(self._swap_lock.acquire(), timeout):
-        # Briefly hold the lock to atomically check model + increment leases
-        if self.active_model is None:
-            self._swap_lock.release()
-            raise NoModelLoadedError()
-        self._active_leases += 1
-        model_ref = self.active_model
-        self._swap_lock.release()
+# --- acquire() → ModelLease (async context manager) ---
 
-    # Yield outside the lock — concurrent reads proceed freely
+@asynccontextmanager
+async def acquire(self, timeout: float):
+    async with asyncio.timeout(timeout):
+        async with self._condition:
+            await self._condition.wait_for(lambda: not self._swapping)
+            if self.active_model is None:
+                raise NoModelLoadedError()
+            self._active_leases += 1
+            model_ref = self.active_model
+
     try:
         yield ModelLease(model=model_ref)
     finally:
-        self._active_leases -= 1
-        if self._active_leases == 0:
-            self._leases_drained.set()
+        async with self._condition:
+            self._active_leases -= 1
+            if self._active_leases == 0:
+                self._condition.notify_all()
+
+
+# --- load_model(model_id) ---
+
+async def load_model(self, model_id: str) -> None:
+    config = self.registry[model_id]  # KeyError if invalid
+    if self.active_model_id == model_id:
+        return
+
+    async with self._condition:
+        self._swapping = True
+        self._condition.notify_all()  # Wake acquire() waiters so they re-check
+        await self._condition.wait_for(lambda: self._active_leases == 0)
+
+    # Outside condition lock: safe to do slow I/O (download, GPU load)
+    old_model = self.active_model
+    del old_model
+    torch.cuda.empty_cache()
+    new_model = SigLip2Model(config, cache_dir=self.cache_dir)
+
+    async with self._condition:
+        self.active_model = new_model
+        self.active_model_id = model_id
+        self._swapping = False
+        self._condition.notify_all()  # Wake all queued acquire() calls
 ```
 
-Key properties:
-- Lock is held only for the brief check+increment (nanoseconds, not for inference duration)
-- Multiple concurrent requests can all hold leases simultaneously (no exclusion during inference)
-- `load_model` cannot sneak between check and increment because both are under the same lock acquisition
-- Wrapped in `asyncio.wait_for(timeout)` so lease acquisition respects `request_timeout_seconds`
+**Key properties:**
 
-**`load_model(model_id)` flow:**
+- **No stale flags:** `wait_for(lambda)` always evaluates current state — no event to forget to clear/set
+- **Concurrent reads:** Multiple requests hold leases simultaneously (condition released after increment)
+- **Exclusive swap:** `_swapping = True` blocks new leases; `wait_for(leases == 0)` waits for in-flight to drain
+- **No lock held during inference:** Condition is released before `yield ModelLease`
+- **Timeout respected:** `asyncio.timeout(timeout)` wraps the entire acquire, including the wait_for
 
-1. Validate `model_id` exists in registry
-2. If already loaded, no-op and return
-3. Acquire `_swap_lock` and **hold it** (new `acquire()` calls will queue here)
-4. Wait for `_leases_drained` event (existing in-flight requests finish, decrement leases to 0)
-5. Unload current model (`del` + `torch.cuda.empty_cache()`)
-6. Instantiate `SigLip2Model` with config (downloads to `cache_dir` if not cached)
-7. Set `active_model` and `active_model_id`
-8. Clear `_leases_drained` event (reset for next swap)
-9. Release `_swap_lock` (queued requests proceed with new model)
+**`load_model` flow summarized:**
 
-The lock is held for the entire swap duration (steps 3-9). This means new requests queue during a swap, but existing requests with leases complete unblocked.
+1. Validate `model_id` in registry
+2. No-op if already loaded
+3. Set `_swapping = True` under condition (new `acquire()` calls will wait)
+4. Wait for `_active_leases == 0` (in-flight requests complete naturally)
+5. Release condition, do slow work: unload old model, download/load new model
+6. Re-acquire condition, set `active_model`, clear `_swapping`, notify all
 
 **`list_models()`** returns registry entries with `loaded: bool` and `cached: bool` (weights exist on disk).
 
