@@ -90,7 +90,13 @@ New implementation using HuggingFace transformers:
 - Sets `model_type = "siglip2"`, `max_token_length = 64`.
 - Uses `torch.inference_mode()` and `torch.autocast("cuda")` on GPU.
 
-**Batched frame scoring path:** For video frames, text features are precomputed once. Per-batch: `encode_images(batch)` → then use `model.forward()` with precomputed text inputs + new image inputs to get proper `logits_per_image`. This preserves the learned scale/bias rather than falling back to raw cosine.
+**Batched frame scoring path:** HuggingFace `Siglip2Model.forward()` takes raw token/pixel tensors, not precomputed embeddings. Two options for video frame batching:
+
+- **Simple path (recommended for v1):** Call `score_batch(images, texts)` per frame batch. Text is re-tokenized/re-encoded each batch. Acceptable overhead because text encoding is cheap relative to image encoding for typical label counts (3-10 labels).
+
+- **Optimized path (future):** Expose `prepare_text(texts) → PreparedText` that caches tokenized text inputs. Then `score_images_against_prepared_text(images, prepared) → ScoreBatch` computes image embeddings, then manually applies the learned parameters: `logits = image_embeds @ text_embeds.T * exp(model.logit_scale) + model.logit_bias`. This requires accessing `model.logit_scale` and `model.logit_bias` attributes directly.
+
+For v1, use the simple path. The optimized path can be added later if profiling shows text re-encoding is a bottleneck (unlikely for ≤10 labels).
 
 ### Model Manager (app/models/model_manager.py)
 
@@ -135,23 +141,47 @@ class ModelManager:
 
 **`acquire()` → ModelLease (async context manager):**
 
-1. Await `_swap_lock` is NOT held (non-exclusive check)
-2. Increment `_active_leases`
-3. Yield `ModelLease` with reference to current `active_model`
-4. On exit: decrement `_active_leases`, signal `_leases_drained` if count hits 0
-5. If no model loaded, raise immediately (503)
-6. Wrapped in `asyncio.wait_for(settings.request_timeout_seconds)` so lease acquisition respects the documented timeout
+Lease acquisition must be atomic with respect to `_swap_lock` to prevent a race where `load_model` acquires the lock between the "is lock free?" check and the lease increment:
+
+```python
+async def acquire(self, timeout: float) -> AsyncContextManager[ModelLease]:
+    async with asyncio.wait_for(self._swap_lock.acquire(), timeout):
+        # Briefly hold the lock to atomically check model + increment leases
+        if self.active_model is None:
+            self._swap_lock.release()
+            raise NoModelLoadedError()
+        self._active_leases += 1
+        model_ref = self.active_model
+        self._swap_lock.release()
+
+    # Yield outside the lock — concurrent reads proceed freely
+    try:
+        yield ModelLease(model=model_ref)
+    finally:
+        self._active_leases -= 1
+        if self._active_leases == 0:
+            self._leases_drained.set()
+```
+
+Key properties:
+- Lock is held only for the brief check+increment (nanoseconds, not for inference duration)
+- Multiple concurrent requests can all hold leases simultaneously (no exclusion during inference)
+- `load_model` cannot sneak between check and increment because both are under the same lock acquisition
+- Wrapped in `asyncio.wait_for(timeout)` so lease acquisition respects `request_timeout_seconds`
 
 **`load_model(model_id)` flow:**
 
 1. Validate `model_id` exists in registry
 2. If already loaded, no-op and return
-3. Acquire exclusive `_swap_lock` (new requests calling `acquire()` will queue here)
-4. Wait for `_leases_drained` (existing in-flight requests finish naturally)
+3. Acquire `_swap_lock` and **hold it** (new `acquire()` calls will queue here)
+4. Wait for `_leases_drained` event (existing in-flight requests finish, decrement leases to 0)
 5. Unload current model (`del` + `torch.cuda.empty_cache()`)
 6. Instantiate `SigLip2Model` with config (downloads to `cache_dir` if not cached)
 7. Set `active_model` and `active_model_id`
-8. Release `_swap_lock` (queued requests proceed with new model)
+8. Clear `_leases_drained` event (reset for next swap)
+9. Release `_swap_lock` (queued requests proceed with new model)
+
+The lock is held for the entire swap duration (steps 3-9). This means new requests queue during a swap, but existing requests with leases complete unblocked.
 
 **`list_models()`** returns registry entries with `loaded: bool` and `cached: bool` (weights exist on disk).
 
@@ -192,6 +222,26 @@ The scoring service no longer decides softmax vs sigmoid — that decision lives
 GET  /api/v1/models        → list available models with active/cached status
 POST /api/v1/models/load   → {"model_id": "siglip2-base-patch16-256"} → loads model
 GET  /api/v1/models/active  → current model info or 404 if none loaded
+```
+
+#### Authentication for Model Endpoints
+
+`RequestGateMiddleware` currently only authenticates `/ready` and `/api/v1/classify` — all other paths pass through (line 155-156). Model management endpoints must be protected:
+
+- Extend `RequestGateMiddleware._check_auth()` to cover all `/api/v1/models*` paths
+- Same `X-API-Key` header check as other authenticated endpoints
+- Without this, anyone with network access could trigger large downloads and GPU memory churn
+
+Implementation: add a path-prefix check in the middleware's `__call__`:
+
+```python
+# /api/v1/models*: auth required, no body size or concurrency gates
+if path.startswith("/api/v1/models"):
+    if not self._check_auth(scope):
+        await _send_json_response(send, 401, {"detail": "..."})
+        return
+    await self._app(scope, receive, send)
+    return
 ```
 
 #### Modified Endpoints
