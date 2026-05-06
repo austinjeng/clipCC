@@ -1,14 +1,55 @@
 # ClipCC
 
-A cross-platform, Dockerized API that classifies video content against user-provided text labels using [OpenCLIP](https://github.com/mlfoundations/open_clip) (ViT-L-14). Upload a video file, provide a set of descriptive labels, and get back confidence scores for how well each label describes the video.
+A cross-platform, Dockerized API that classifies video content against user-provided text labels. Upload a video file, provide a set of descriptive labels, and get back confidence scores for how well each label describes the video.
 
 **Example use case:** Upload dashcam footage with labels like `"drunk driving"`, `"normal driving"`, `"distracted driving"` and get back which label best matches the video content.
 
 ---
 
+## Two Versions Available
+
+This repository has two branches, each offering a different model backend:
+
+| | `master` (CLIP) | `SigLip2` (SigLIP2) |
+|---|---|---|
+| **Model** | [OpenCLIP](https://github.com/mlfoundations/open_clip) ViT-L-14 | [SigLIP2](https://huggingface.co/docs/transformers/model_doc/siglip2) (multiple sizes) |
+| **Model switching** | Fixed at build time | Hot-swap from web UI or API — no restart |
+| **Web UI** | None (API only) | Built-in UI at `http://localhost:8000/` |
+| **Model storage** | Baked into Docker image | Downloaded on demand, cached in Docker volume |
+| **Scoring** | Softmax (scores sum to 1) | Sigmoid (independent per-label scores) |
+| **Docker image size** | ~2 GB (weights included) | ~1 GB (weights downloaded separately) |
+
+**Which should I use?**
+- Use **`master`** if you want a simple, self-contained setup with no runtime downloads.
+- Use **`SigLip2`** if you want a web UI, the ability to switch between models without restarting, or access to newer/larger SigLIP2 models.
+
+### Getting the source code
+
+```bash
+# Clone the repository (lands on master by default)
+git clone https://github.com/austinjeng/clipCC.git
+cd clipCC
+
+# To use the SigLip2 version instead:
+git checkout SigLip2
+```
+
+Or clone the SigLip2 branch directly:
+
+```bash
+git clone -b SigLip2 https://github.com/austinjeng/clipCC.git
+cd clipCC
+```
+
+> The setup instructions below cover **both versions**. The `master` branch guide is first, followed by the [SigLip2 Branch Guide](#siglip2-branch-guide).
+
+---
+
 ## Table of Contents
 
-- [Setup by Platform](#setup-by-platform)
+- [Two Versions Available](#two-versions-available)
+- [SigLip2 Branch Guide](#siglip2-branch-guide) (web UI + hot-swap models)
+- [Setup by Platform](#setup-by-platform) (master branch)
   - [Windows](#windows)
   - [macOS](#macos)
   - [Linux](#linux)
@@ -32,16 +73,13 @@ A cross-platform, Dockerized API that classifies video content against user-prov
 
 Pick your operating system and follow the steps. All three paths end at the same place: a running ClipCC server on `http://localhost:8000`.
 
-### Getting the source code
+### Getting the source code (master)
 
-If you received ClipCC as a zip or folder, extract it and `cd` into it. If it's hosted on a Git remote:
+See [Getting the source code](#getting-the-source-code) above. Make sure you are on the `master` branch:
 
 ```bash
-git clone https://github.com/your-org/clipCC.git
-cd clipCC
+git checkout master
 ```
-
-Replace the URL above with the actual repository URL provided by your team. The remaining steps assume you are inside the `clipCC` directory.
 
 ---
 
@@ -993,6 +1031,178 @@ Client uploads video + labels
 - **Model baked into Docker image:** Model weights are downloaded during `docker build` and stored in the image. No runtime downloads, no volume mounts needed. The model config is a single source of truth in `/app/.baked_model`.
 
 - **Logit scaling:** CLIP's learned `logit_scale` parameter (~100) is applied before softmax. Without it, softmax over raw cosine similarities (0.2-0.35 range) produces near-uniform, meaningless distributions.
+
+---
+
+## SigLip2 Branch Guide
+
+This section covers the `SigLip2` branch, which uses Google's [SigLIP2](https://huggingface.co/docs/transformers/model_doc/siglip2) models via HuggingFace transformers. It includes a built-in web UI, hot-swappable models, and on-demand model downloads.
+
+### Switch to the SigLip2 branch
+
+```bash
+git checkout SigLip2
+```
+
+### Available SigLIP2 models
+
+| Model | Parameters | Resolution | Best for |
+|---|---|---|---|
+| `siglip2-base-patch16-256` | 0.4B | 256px | Fast inference, low memory (default for CPU) |
+| `siglip2-base-patch16-384` | 0.4B | 384px | Better accuracy, still lightweight |
+| `siglip2-large-patch16-256` | 0.9B | 256px | Higher quality, moderate speed |
+| `siglip2-large-patch16-384` | 0.9B | 384px | High quality, moderate memory |
+| `siglip2-so400m-patch14-384` | 1B | 384px | Best quality (default for GPU) |
+| `siglip2-so400m-patch16-512` | 1B | 512px | Highest resolution, most memory |
+
+### Setup — Docker (Recommended)
+
+Prerequisites are the same as the master branch (Docker Desktop or Docker Engine).
+
+**Step 1: Build the image**
+
+```bash
+docker compose --profile cpu build
+```
+
+The build is faster than master (~1 GB, no model weights baked in).
+
+**Step 2: Start the server**
+
+```bash
+docker compose --profile cpu up
+```
+
+On first startup, the default model (`siglip2-base-patch16-256`, ~800 MB) downloads automatically. This happens once — the Docker volume caches it for future runs.
+
+Wait for:
+```
+INFO:     Uvicorn running on http://0.0.0.0:8000
+INFO:     Auto-loaded model: siglip2-base-patch16-256
+```
+
+**Step 3: Open the web UI**
+
+Open your browser to **http://localhost:8000/**
+
+You'll see the clipCC web interface with:
+- A model dropdown (6 SigLIP2 models to choose from)
+- Status indicator (green = model loaded and ready)
+- Video upload, labels input, and classify button
+
+**Step 4: Classify a video from the web UI**
+
+1. The default model auto-loads at startup. Wait for the green status dot.
+2. Upload a `.mp4`, `.avi`, `.mov`, or `.mkv` video file
+3. Enter labels separated by commas (3-10 labels), e.g.: `driving, parking, reversing`
+4. Click **Classify**
+5. Results appear as horizontal confidence bars
+
+**Step 5: Switch models (optional)**
+
+1. Select a different model from the dropdown
+2. Click **Load Model**
+3. Wait for the spinner to finish (downloads the model if not cached, then loads it)
+4. The status dot turns green when ready
+5. Classify again — the new model is now active
+
+**Step 6: Stop the server**
+
+```bash
+docker compose --profile cpu down
+```
+
+Model weights persist in the Docker volume — they won't need to re-download next time.
+
+### Setup — Native (No Docker)
+
+**Prerequisites:** Same as master branch (Python 3.11+, ffmpeg). Plus install the additional dependencies:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate       # Linux/macOS
+# .\.venv\Scripts\Activate.ps1  # Windows PowerShell
+
+pip install -r requirements.txt
+```
+
+**Start the server:**
+
+```bash
+ALLOW_UNAUTHENTICATED=true \
+CLIP_CACHE_DIR=$HOME/.cache/clipcc_models \
+TEMP_DIR=/tmp/clipcc \
+uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000
+```
+
+Windows PowerShell:
+```powershell
+$env:ALLOW_UNAUTHENTICATED = "true"
+$env:CLIP_CACHE_DIR = "C:\temp\clipcc_models"
+$env:TEMP_DIR = "C:\temp\clipcc"
+uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000
+```
+
+On first startup, the default model (~800 MB) downloads automatically. Open **http://localhost:8000/** in your browser.
+
+### SigLip2 API — Classify via command line
+
+The web UI is optional. You can also use the API directly:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/classify \
+  -F "video=@test_video.mp4" \
+  -F 'labels=["driving","parking","reversing"]' \
+  -F "prompt_template=This is a photo of {}." \
+  -F "fps=1.0" \
+  -F "aggregation=mean"
+```
+
+> **Note:** The default prompt template on the SigLip2 branch is `"This is a photo of {}."` (matching SigLIP2's training data), not `"a video of {}"`.
+
+### SigLip2 API — Model management endpoints
+
+```bash
+# List available models
+curl http://localhost:8000/api/v1/models
+
+# Load a specific model
+curl -X POST http://localhost:8000/api/v1/models/load \
+  -H "Content-Type: application/json" \
+  -d '{"model_id": "siglip2-large-patch16-384"}'
+
+# Check which model is active
+curl http://localhost:8000/api/v1/models/active
+```
+
+### SigLip2 — Understanding scores
+
+SigLIP2 uses **sigmoid** scoring instead of softmax. This means:
+
+- Each label gets an **independent** confidence score between 0 and 1
+- Scores do **NOT** sum to 1 (unlike the master branch)
+- A score of 0.8 means the model is 80% confident that label applies, regardless of other labels
+- Multiple labels can score high simultaneously if the video matches several descriptions
+
+The response includes `score_semantics: "siglip2_pairwise_sigmoid"` so you know which scoring method was used.
+
+### SigLip2 — Configuration
+
+All settings from the master branch still apply, plus one new variable:
+
+| Variable | Default | Description |
+|---|---|---|
+| `DEFAULT_MODEL_ID` | `siglip2-base-patch16-256` | Model to auto-load at startup. Set to a larger model if you have GPU/more memory. |
+
+### SigLip2 — GPU support
+
+```bash
+# Build and run with GPU
+docker compose --profile gpu build
+docker compose --profile gpu up
+```
+
+The GPU profile defaults to `siglip2-so400m-patch14-384` (1B parameters) — the highest quality model that fits comfortably in most GPUs. You can switch to other models from the web UI at any time.
 
 ---
 
