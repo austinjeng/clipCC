@@ -22,7 +22,43 @@ Built on three core abstractions that prevent subtle bugs:
 
 ## Core Abstractions
 
-### 1. `TemporalScoringPolicy`
+### 1. `ScoringContext`
+
+**Problem (Finding #8 — Pass 2):** `aggregate_frame_scores()` concatenates only confidence/raw tensors, discarding `semantics` and `logits`. By the time `aggregate_temporal()` runs, the policy can't access a `ScoreBatch` — the batch structure is gone. Passing `confidence`, `raw_sim`, `logits`, `semantics`, `policy`, `timeline`, and `temporal_options` as parallel arguments is fragile.
+
+**Location:** `app/services/scoring.py`
+
+```python
+@dataclass
+class ScoringContext:
+    confidence: torch.Tensor      # (n_frames, n_labels) — concatenated from all batches
+    raw_similarity: torch.Tensor  # (n_frames, n_labels)
+    logits: torch.Tensor          # (n_frames, n_labels)
+    semantics: str                # from ScoreBatch.semantics (validated same across batches)
+    labels: list[str]
+    frames: list[FrameSample]
+    timeline: FrameTimeline | None = None
+
+    @classmethod
+    def from_batches(cls, batches: list[ScoreBatch], labels: list[str],
+                     frames: list[FrameSample],
+                     timeline: FrameTimeline | None = None) -> "ScoringContext":
+        semantics_set = {b.semantics for b in batches}
+        assert len(semantics_set) == 1, "Mixed model semantics in single request"
+        return cls(
+            confidence=torch.cat([b.confidence for b in batches], dim=0),
+            raw_similarity=torch.cat([b.raw_similarity for b in batches], dim=0),
+            logits=torch.cat([b.logits for b in batches], dim=0),
+            semantics=semantics_set.pop(),
+            labels=labels,
+            frames=frames,
+            timeline=timeline,
+        )
+```
+
+All aggregators receive `ScoringContext` as their single data argument. The policy reads `ctx.semantics` and operates on `ctx.confidence` or `ctx.logits` as appropriate.
+
+### 2. `TemporalScoringPolicy`
 
 **Problem (Finding #1):** `threshold=0.5` assumes confidence means the same thing across models. SigLip2 uses independent sigmoid scores (0.5 is a meaningful absolute boundary). CLIP uses relative softmax scores (0.5 means nothing absolute — it depends on the label set).
 
@@ -31,7 +67,7 @@ Built on three core abstractions that prevent subtle bugs:
 ```python
 class TemporalScoringPolicy(ABC):
     @abstractmethod
-    def detection_scores(self, batch: ScoreBatch) -> torch.Tensor:
+    def detection_scores(self, ctx: ScoringContext) -> torch.Tensor:
         """Return the tensor to threshold against. Shape: (n_frames, n_labels)."""
         ...
 
@@ -46,8 +82,8 @@ class TemporalScoringPolicy(ABC):
         ...
 
 class SigLip2Policy(TemporalScoringPolicy):
-    def detection_scores(self, batch):
-        return batch.confidence  # sigmoid scores, directly thresholdable
+    def detection_scores(self, ctx):
+        return ctx.confidence  # sigmoid scores, directly thresholdable
     def default_threshold(self):
         return 0.5
     def threshold_mode(self):
@@ -55,17 +91,27 @@ class SigLip2Policy(TemporalScoringPolicy):
 
 class SoftmaxPolicy(TemporalScoringPolicy):
     """For CLIP or other softmax-based models."""
-    def detection_scores(self, batch):
-        return batch.confidence  # softmax scores
+    def detection_scores(self, ctx):
+        return ctx.confidence  # softmax scores
     def default_threshold(self):
         return 0.3  # lower default; softmax scores are label-set-relative
     def threshold_mode(self):
         return "relative"
 ```
 
-**Registry:** keyed by `ScoreBatch.semantics`:
-- `"siglip2_pairwise_sigmoid"` → `SigLip2Policy`
-- `"clip_softmax"` → `SoftmaxPolicy` (future)
+**Semantics constants** (Finding #10 — avoids registry mismatch):
+
+```python
+class ScoreSemantics:
+    SIGLIP2_SIGMOID = "siglip2_pairwise_sigmoid"
+    CLIP_RELATIVE_SOFTMAX = "clip_relative_softmax"
+```
+
+**Registry:** keyed by semantics constants:
+- `ScoreSemantics.SIGLIP2_SIGMOID` → `SigLip2Policy`
+- `ScoreSemantics.CLIP_RELATIVE_SOFTMAX` → `SoftmaxPolicy`
+
+Lookup raises `ValueError` with a clear message if an unregistered semantics string is encountered.
 
 When `threshold` is not explicitly provided by the user, the policy's `default_threshold()` is used. When explicitly provided, the user's value always wins. The `threshold_mode` is returned in metadata and drives the tooltip wording in the UI.
 
@@ -112,7 +158,7 @@ class FrameTimeline:
 
 All duration/gap math goes through `FrameTimeline`. No raw `1/fps` arithmetic scattered elsewhere.
 
-### 3. `AggregationResult`
+### 4. `AggregationResult`
 
 **Problem (Finding #5):** `build_response_scores()` returns `tuple[list[ScoreItem], BestMatch]`. Bolting `temporal` onto this makes the plumbing brittle.
 
@@ -126,7 +172,7 @@ class AggregationResult:
     temporal: TemporalResult | None = None
 ```
 
-**Aggregator routing** replaces the if/else chain with a registry:
+**Aggregator routing** replaces the if/else chain with a registry. All aggregators receive `ScoringContext` + optional `ResolvedTemporalOptions`:
 
 ```python
 AGGREGATORS = {
@@ -140,17 +186,14 @@ def aggregate_frame_scores(
     labels: list[str],
     frames: list[FrameSample],
     aggregation: str,
-    temporal_options: TemporalOptions | None = None,
+    temporal_options: ResolvedTemporalOptions | None = None,
     timeline: FrameTimeline | None = None,
     policy: TemporalScoringPolicy | None = None,
 ) -> AggregationResult:
-    all_confidence = torch.cat([b.confidence for b in batches], dim=0)
-    all_raw_sim = torch.cat([b.raw_similarity for b in batches], dim=0)
+    ctx = ScoringContext.from_batches(batches, labels, frames, timeline)
 
     aggregator = AGGREGATORS[aggregation]
-    return aggregator(all_confidence, all_raw_sim, labels, frames,
-                      temporal_options=temporal_options,
-                      timeline=timeline, policy=policy)
+    return aggregator(ctx, temporal_options=temporal_options, policy=policy)
 ```
 
 Mean and max aggregators ignore the temporal-only params and return `AggregationResult(scores, best_match, temporal=None)`.
@@ -168,16 +211,33 @@ New parameters accepted when `aggregation="temporal"`:
 | `gap_tolerance` | float | `2.0` | `0.0 - 10.0` | Max gap in seconds to bridge between segments |
 | `min_duration` | float | `1.0` | `0.0 - 10.0` | Minimum segment length in seconds to report |
 
-**Parameter validation (Finding #6):** All temporal parameters are parsed through a `TemporalOptions` value object:
+**Parameter validation (Finding #6, #9):** Split raw request parsing from resolved options:
 
 ```python
-class TemporalOptions(BaseModel):
-    threshold: float = Field(ge=0.0, le=1.0)
-    gap_tolerance: float = Field(ge=0.0, le=10.0)
-    min_duration: float = Field(ge=0.0, le=10.0)
+class RawTemporalParams(BaseModel):
+    """What the client sent — threshold may be omitted to use policy default."""
+    threshold: float | None = Field(None, ge=0.0, le=1.0)
+    gap_tolerance: float | None = Field(None, ge=0.0, le=10.0)
+    min_duration: float | None = Field(None, ge=0.0, le=10.0)
+
+class ResolvedTemporalOptions(BaseModel):
+    """Fully resolved — all fields have concrete values."""
+    threshold: float
+    gap_tolerance: float
+    min_duration: float
+    threshold_was_defaulted: bool   # True if user didn't supply threshold
+
+    @classmethod
+    def resolve(cls, raw: RawTemporalParams, policy: TemporalScoringPolicy) -> "ResolvedTemporalOptions":
+        return cls(
+            threshold=raw.threshold if raw.threshold is not None else policy.default_threshold(),
+            gap_tolerance=raw.gap_tolerance if raw.gap_tolerance is not None else 2.0,
+            min_duration=raw.min_duration if raw.min_duration is not None else 1.0,
+            threshold_was_defaulted=(raw.threshold is None),
+        )
 ```
 
-- When `aggregation="temporal"`: `TemporalOptions` is constructed (using policy default for threshold if not provided). Ranges are always validated.
+- When `aggregation="temporal"`: `RawTemporalParams` is parsed (ranges validated on any supplied value), then resolved against the policy into `ResolvedTemporalOptions`.
 - When `aggregation` is `"mean"` or `"max"`: if any temporal params are supplied, the API returns `422 Unprocessable Entity` with message `"Parameters 'threshold', 'gap_tolerance', 'min_duration' are only valid with aggregation='temporal'"`. This catches client bugs early rather than silently hiding them.
 
 ### Response Schema
@@ -189,15 +249,16 @@ class FrameScore(BaseModel):
     scores: dict[str, float]  # {label: confidence}
 
 class SegmentStats(BaseModel):
-    active_avg: float         # mean of above-threshold frames only
+    active_avg: float         # mean of above-threshold frames only (event strength)
     interval_avg: float       # mean of all frames in [start, end] including bridged gaps
     coverage_ratio: float     # fraction of segment frames that are above threshold
+    active_duration: float    # (Finding #12) sum of active frame intervals only (excludes gaps)
 
 class Segment(BaseModel):
     label: str
     start_time: float         # seconds
     end_time: float           # seconds
-    duration: float           # seconds
+    duration: float           # seconds (full segment span including bridged gaps)
     stats: SegmentStats       # (Finding #3)
     peak_confidence: float
     peak_timestamp: float
@@ -205,9 +266,10 @@ class Segment(BaseModel):
 class LabelSummary(BaseModel):
     label: str
     segment_count: int
-    total_active_duration: float    # sum of all segment durations
+    total_active_duration: float    # (Finding #12) sum of active frame intervals across segments
+    total_segment_duration: float   # sum of full segment durations (for display)
     peak_confidence: float          # best peak across all segments
-    duration_weighted_confidence: float  # weighted by segment duration
+    duration_weighted_confidence: float  # weighted by active_duration per segment
 
 class TemporalResult(BaseModel):
     timeline: list[FrameScore]
@@ -215,6 +277,8 @@ class TemporalResult(BaseModel):
     label_summaries: list[LabelSummary]       # (Finding #4) temporal ranking
     best_segment: Segment | None              # (Finding #4) highest peak_confidence segment
     threshold_mode: str                       # (Finding #1) "absolute" or "relative"
+    effective_threshold: float                # (Finding #11) the resolved threshold value used
+    threshold_was_defaulted: bool             # (Finding #11) whether user supplied it or policy did
 
 class ClassifyResponse(BaseModel):
     best_match: BestMatch
@@ -223,9 +287,11 @@ class ClassifyResponse(BaseModel):
     temporal: TemporalResult | None = None
 ```
 
-**Finding #3 — SegmentStats:** Merged segments distinguish `active_avg` (only above-threshold frames — event strength) from `interval_avg` (all frames including bridged gaps). `coverage_ratio` shows how much of the segment was genuinely active vs. bridged. A segment with `active_avg=0.82, interval_avg=0.68, coverage_ratio=0.75` clearly communicates "strong event with some gaps bridged."
+**Finding #3 — SegmentStats:** Merged segments distinguish `active_avg` (only above-threshold frames — event strength) from `interval_avg` (all frames including bridged gaps). `coverage_ratio` shows frame-count fraction. `active_duration` gives the sum of active frame intervals in seconds (excludes bridged gap time). A segment with `active_avg=0.82, interval_avg=0.68, coverage_ratio=0.75, active_duration=3.75s` on a 5s segment clearly communicates "strong event with 1.25s of tolerated gaps."
 
-**Finding #4 — Temporal ranking:** `best_match` still uses mean aggregation for backward compatibility. `temporal.best_segment` surfaces the strongest burst (what this feature exists to find). `temporal.label_summaries` provides per-label temporal metrics for richer analysis: how many segments, total active time, and duration-weighted confidence.
+**Finding #4 — Temporal ranking:** `best_match` still uses mean aggregation for backward compatibility. `temporal.best_segment` surfaces the strongest burst (what this feature exists to find). `temporal.label_summaries` provides per-label temporal metrics: `total_active_duration` sums only active frame intervals (not full segment spans including gaps), while `total_segment_duration` gives the full display-friendly span. `duration_weighted_confidence` weights by active time, not total time — so bridged gaps don't dilute the event strength metric.
+
+**Finding #11 — Effective threshold in response:** `effective_threshold` tells the UI exactly what threshold line to draw on the chart, and `threshold_was_defaulted` lets the UI indicate "using model default" vs. "user-specified" — important for transparency when the policy picks a non-obvious value like 0.3 for softmax models.
 
 ## Temporal Analysis Engine
 
@@ -235,56 +301,59 @@ Located in `app/services/scoring.py`.
 
 ```
 Input:
-  confidence: Tensor (n_frames, n_labels)
-  raw_sim: Tensor (n_frames, n_labels)
-  frames: list[FrameSample]
-  labels: list[str]
-  temporal_options: TemporalOptions
-  timeline: FrameTimeline          # (Finding #2) centralized timing
-  policy: TemporalScoringPolicy    # (Finding #1) model-aware scoring
+  ctx: ScoringContext              # (Finding #8) single data object with all tensors + metadata
+  temporal_options: ResolvedTemporalOptions  # (Finding #9) fully resolved, no None fields
+  policy: TemporalScoringPolicy    # (Finding #1) resolved from ctx.semantics
 
 Step 1 — Get detection scores:
-  detection = policy.detection_scores(batches)
-  (For SigLip2, this is the sigmoid confidence tensor directly)
+  detection = policy.detection_scores(ctx)
+  (For SigLip2, reads ctx.confidence — sigmoid scores, directly thresholdable)
+  (Policy has full access to ctx.logits if a future policy needs raw logits)
 
 Step 2 — Build timeline:
   For each frame i:
-    FrameScore(timestamp=timeline.timestamp(i),
+    FrameScore(timestamp=ctx.timeline.timestamp(i),
                frame_index=i,
-               scores={label: detection[i][j] for j, label in labels})
+               scores={label: detection[i][j] for j, label in ctx.labels})
 
 Step 3 — Detect segments (per label):
   For each label j:
     a) Binary mask: detection[:, j] >= temporal_options.threshold
     b) Find contiguous runs of True → raw segments (start_idx, end_idx)
-    c) Bridge gaps: if timeline.gap_seconds(seg_a_end, seg_b_start) <= gap_tolerance → merge
-    d) Filter: discard where timeline.segment_duration(start, end) < min_duration
+    c) Bridge gaps: if ctx.timeline.gap_seconds(seg_a_end, seg_b_start) <= gap_tolerance → merge
+    d) Filter: discard where ctx.timeline.segment_duration(start, end) < min_duration
     e) For each surviving segment, compute:
-       - start_time = timeline.timestamp(start_idx)
-       - end_time = timeline.intervals[end_idx].end
-       - duration = timeline.segment_duration(start_idx, end_idx)
-       - active frames = frames where detection >= threshold within [start, end]
-       - stats.active_avg = mean of active frames' scores
-       - stats.interval_avg = mean of ALL frames' scores in [start, end]
-       - stats.coverage_ratio = len(active frames) / len(all frames in range)
+       - start_time = ctx.timeline.timestamp(start_idx)
+       - end_time = ctx.timeline.intervals[end_idx].end
+       - duration = ctx.timeline.segment_duration(start_idx, end_idx)
+       - active_indices = indices where detection >= threshold within [start, end]
+       - stats.active_avg = mean of detection[active_indices, j]
+       - stats.interval_avg = mean of detection[start:end+1, j]
+       - stats.coverage_ratio = len(active_indices) / (end_idx - start_idx + 1)
+       - stats.active_duration = sum of ctx.timeline.intervals[i].end - .start for active_indices
        - peak_confidence = max of detection[start:end+1, j]
-       - peak_timestamp = timeline.timestamp(argmax frame)
+       - peak_timestamp = ctx.timeline.timestamp(argmax frame)
 
 Step 4 — Build label summaries:
   For each label, aggregate across its segments:
     - segment_count
-    - total_active_duration = sum of segment durations
+    - total_active_duration = sum of seg.stats.active_duration across segments
+    - total_segment_duration = sum of seg.duration across segments
     - peak_confidence = max peak across segments
-    - duration_weighted_confidence = sum(seg.duration * seg.stats.active_avg) / total_active_duration
+    - duration_weighted_confidence = sum(seg.stats.active_duration * seg.stats.active_avg) / total_active_duration
 
 Step 5 — Identify best_segment:
   Segment with highest peak_confidence across all labels. None if no segments detected.
 
 Step 6 — Return:
-  scores: aggregate_mean(confidence, raw_sim, labels, frames)  # reuse existing
+  scores: aggregate_mean(ctx)  # reuse existing, operates on ctx.confidence/raw_similarity
   best_match: from mean scores (backward compat)
-  temporal: TemporalResult(timeline, segments, label_summaries, best_segment,
-                           threshold_mode=policy.threshold_mode())
+  temporal: TemporalResult(
+      timeline, segments, label_summaries, best_segment,
+      threshold_mode=policy.threshold_mode(),
+      effective_threshold=temporal_options.threshold,
+      threshold_was_defaulted=temporal_options.threshold_was_defaulted,
+  )
 ```
 
 ### Edge Cases
@@ -359,7 +428,7 @@ Unchanged from current behavior.
 
 | File | Purpose |
 |------|---------|
-| `app/services/temporal_policy.py` | `TemporalScoringPolicy` ABC, `SigLip2Policy`, policy registry |
+| `app/services/temporal_policy.py` | `TemporalScoringPolicy` ABC, `SigLip2Policy`, `SoftmaxPolicy`, `ScoreSemantics` constants, policy registry |
 | `app/services/frame_timeline.py` | `FrameTimeline`, `FrameInterval`, centralized timing math |
 | `static/vendor/chart.min.js` | Vendored Chart.js (Finding #7) |
 
@@ -367,11 +436,13 @@ Unchanged from current behavior.
 
 | File | Change |
 |------|--------|
-| `app/main.py` | Accept temporal params via `TemporalOptions`, validate (reject if non-temporal), build `FrameTimeline`, resolve policy from semantics, pass to aggregator |
-| `app/services/scoring.py` | Add `AggregationResult` dataclass, `aggregate_temporal()`, aggregator registry. Existing `aggregate_mean`/`aggregate_max` return `AggregationResult` instead of tuple. Update all callers. |
-| `app/schemas/response.py` | Add `FrameScore`, `SegmentStats`, `Segment`, `LabelSummary`, `TemporalResult`, `TemporalOptions` models. Add `temporal` field to `ClassifyResponse`. |
+| `app/main.py` | Parse `RawTemporalParams`, validate (reject if non-temporal), build `FrameTimeline`, resolve policy from semantics, resolve `ResolvedTemporalOptions`, pass to aggregator |
+| `app/services/scoring.py` | Add `ScoringContext`, `AggregationResult`, `aggregate_temporal()`, aggregator registry. Existing `aggregate_mean`/`aggregate_max` accept `ScoringContext`, return `AggregationResult`. Update all callers. |
+| `app/schemas/response.py` | Add `FrameScore`, `SegmentStats`, `Segment`, `LabelSummary`, `TemporalResult`, `RawTemporalParams`, `ResolvedTemporalOptions` models. Add `temporal` field to `ClassifyResponse`. |
 | `app/config.py` | Default values and bounds for temporal params |
-| `static/index.html` | Radio buttons, sliders with dynamic tooltips, Chart.js chart with fallback, segment table with SegmentStats columns, best segment badge |
+| `app/models/siglip2_model.py` | Import and use `ScoreSemantics.SIGLIP2_SIGMOID` constant instead of string literal |
+| `app/models/clip_model.py` | Import and use `ScoreSemantics.CLIP_RELATIVE_SOFTMAX` constant instead of string literal |
+| `static/index.html` | Radio buttons, sliders with dynamic tooltips (threshold default from API response), Chart.js chart with table-only fallback, segment table with SegmentStats columns, best segment badge |
 
 ### Unchanged
 
@@ -383,8 +454,8 @@ Unchanged from current behavior.
 
 ### Tests
 
-- `tests/test_temporal_policy.py` — policy selection from semantics, default thresholds, detection score extraction
-- `tests/test_frame_timeline.py` — interval construction, gap calculation, duration math, video_duration clamping, single-frame edge case
-- `tests/test_scoring.py` — `AggregationResult` return type for all modes, `aggregate_temporal()` segment detection, gap bridging, min duration, SegmentStats (active_avg vs interval_avg), label summaries, best_segment selection
-- `tests/test_api.py` — temporal endpoint response shape, 422 on temporal params with non-temporal mode, threshold default from policy
+- `tests/test_temporal_policy.py` — policy selection from semantics constants, default thresholds, detection score extraction from `ScoringContext`, unknown semantics raises `ValueError`
+- `tests/test_frame_timeline.py` — interval construction, gap calculation, duration math, video_duration clamping, single-frame edge case, active_duration computation
+- `tests/test_scoring.py` — `ScoringContext.from_batches()` concatenation + semantics validation, `AggregationResult` return type for all modes, `aggregate_temporal()` segment detection, gap bridging, min duration, SegmentStats (active_avg vs interval_avg vs active_duration), label summaries (total_active_duration uses active frame intervals), best_segment selection
+- `tests/test_api.py` — temporal endpoint response shape, 422 on temporal params with non-temporal mode, `RawTemporalParams` → `ResolvedTemporalOptions` resolution, threshold default from policy, `effective_threshold` and `threshold_was_defaulted` in response
 - `tests/test_integration.py` — end-to-end temporal flow
