@@ -5,6 +5,7 @@ from PIL import Image
 from transformers import AutoModel, AutoProcessor
 
 from app.models.base_model import BaseModel, ScoreBatch
+from app.services.temporal_policy import ScoreSemantics
 
 
 class SigLip2Model(BaseModel):
@@ -62,7 +63,7 @@ class SigLip2Model(BaseModel):
             confidence=confidence,
             raw_similarity=raw_similarity,
             logits=logits,
-            semantics="siglip2_pairwise_sigmoid",
+            semantics=ScoreSemantics.SIGLIP2_SIGMOID,
         )
 
     def validate_prompts(self, prompts: list[str]) -> list[int]:

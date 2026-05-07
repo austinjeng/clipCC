@@ -2,6 +2,7 @@ import open_clip
 import torch
 from PIL import Image
 from app.models.base_model import BaseModel, ScoreBatch
+from app.services.temporal_policy import ScoreSemantics
 from app.models.model_spec import ModelSpec
 
 
@@ -46,7 +47,7 @@ class ClipModel(BaseModel):
             confidence=confidence,
             raw_similarity=raw_similarity,
             logits=logits,
-            semantics="clip_relative_softmax",
+            semantics=ScoreSemantics.CLIP_RELATIVE_SOFTMAX,
         )
 
     def validate_prompts(self, prompts: list[str]) -> list[int]:
