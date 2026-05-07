@@ -284,7 +284,7 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
 
                         all_batches, all_frames = result
 
-                    scores, best_match = aggregate_frame_scores(
+                    agg_result = aggregate_frame_scores(
                         all_batches, parsed_labels, all_frames, aggregation
                     )
 
@@ -293,8 +293,8 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
                     semantics = all_batches[0].semantics if all_batches else ""
 
                     return ClassifyResponse(
-                        best_match=best_match,
-                        scores=scores,
+                        best_match=agg_result.best_match,
+                        scores=agg_result.scores,
                         metadata=ClassifyMetadata(
                             frames_analyzed=len(all_frames),
                             video_duration_seconds=video_info.duration,
@@ -306,6 +306,7 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
                             model_type=model.model_type,
                             score_semantics=semantics,
                         ),
+                        temporal=agg_result.temporal,
                     )
 
                 except InferenceConcurrencyError:
