@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>clipCC</title>
+<script src="/static/vendor/chart.min.js"></script>
 <style>
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -75,7 +76,98 @@ button:disabled { background: #93b4f5; cursor: not-allowed; }
 .error-msg { color: #dc2626; font-size: 0.85rem; margin-top: 0.5rem; }
 .hint { font-size: 0.78rem; color: #888; margin-top: -0.5rem; margin-bottom: 0.75rem; }
 
-/* Results */
+/* Temporal panel */
+#temporal-panel {
+  display: none;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.75rem;
+}
+#temporal-panel h3 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 0.6rem;
+}
+.slider-row {
+  margin-bottom: 0.65rem;
+}
+.slider-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.2rem;
+}
+.slider-header label {
+  margin-bottom: 0;
+  font-size: 0.82rem;
+  font-weight: 500;
+  color: #555;
+}
+.slider-value {
+  font-size: 0.82rem;
+  color: #374151;
+  font-weight: 600;
+  margin-left: auto;
+  min-width: 2.5rem;
+  text-align: right;
+}
+.slider-default-tag {
+  font-size: 0.75rem;
+  color: #9ca3af;
+  font-style: italic;
+  margin-left: 0.25rem;
+}
+input[type="range"] {
+  width: 100%;
+  margin: 0;
+  accent-color: #2563eb;
+  cursor: pointer;
+}
+
+/* Tooltip */
+.tooltip-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #d1d5db;
+  color: #374151;
+  font-size: 0.65rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+  flex-shrink: 0;
+  position: relative;
+}
+.tooltip-icon:hover .tooltip-card {
+  display: block;
+}
+.tooltip-card {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 260px;
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+  padding: 0.5rem 0.65rem;
+  font-size: 0.78rem;
+  color: #374151;
+  line-height: 1.45;
+  z-index: 100;
+  white-space: normal;
+  font-style: normal;
+  font-weight: normal;
+}
+
+/* Results section */
 #results-section { display: none; }
 .result-item { margin-bottom: 0.6rem; }
 .result-label-row { display: flex; justify-content: space-between; font-size: 0.85rem; margin-bottom: 0.2rem; }
@@ -83,6 +175,59 @@ button:disabled { background: #93b4f5; cursor: not-allowed; }
 .bar-fill { background: #2563eb; height: 100%; border-radius: 4px; transition: width 0.4s ease; min-width: 2px; }
 .best-match { font-size: 0.9rem; font-weight: 600; margin-bottom: 0.75rem; }
 .meta-info { font-size: 0.78rem; color: #888; margin-top: 0.75rem; line-height: 1.6; }
+
+/* Temporal results */
+#temporal-results {
+  display: none;
+  margin-bottom: 0.85rem;
+}
+.best-segment-badge {
+  background: #dbeafe;
+  color: #1e40af;
+  border: 1px solid #bfdbfe;
+  border-radius: 6px;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.85rem;
+  margin-bottom: 0.75rem;
+}
+#chart-container {
+  height: 300px;
+  margin-bottom: 0.85rem;
+}
+.seg-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+.seg-table th {
+  text-align: left;
+  padding: 0.3rem 0.4rem;
+  border-bottom: 2px solid #e5e7eb;
+  color: #6b7280;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.seg-table td {
+  padding: 0.3rem 0.4rem;
+  border-bottom: 1px solid #f3f4f6;
+  color: #374151;
+  white-space: nowrap;
+}
+.seg-table tr:last-child td { border-bottom: none; }
+.seg-color-swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 4px;
+  vertical-align: middle;
+}
+.no-segments-msg {
+  color: #9ca3af;
+  font-size: 0.85rem;
+  padding: 0.5rem 0;
+  text-align: center;
+}
 </style>
 </head>
 <body>
@@ -130,7 +275,50 @@ button:disabled { background: #93b4f5; cursor: not-allowed; }
         <select id="agg-select">
           <option value="mean">mean</option>
           <option value="max">max</option>
+          <option value="temporal">temporal</option>
         </select>
+      </div>
+    </div>
+
+    <!-- Temporal Parameter Panel -->
+    <div id="temporal-panel">
+      <h3>Temporal Parameters</h3>
+
+      <!-- Confidence Threshold -->
+      <div class="slider-row" id="threshold-row">
+        <div class="slider-header">
+          <label for="threshold-slider">Confidence Threshold</label>
+          <span class="tooltip-icon">?
+            <span class="tooltip-card" id="threshold-tooltip-card">Minimum confidence for event detection. SigLip2 sigmoid scores are directly interpretable — 0.5 means the model is neutral. Higher = stricter.</span>
+          </span>
+          <span class="slider-value" id="threshold-value">0.50</span>
+          <span class="slider-default-tag" id="threshold-default-tag">(model default)</span>
+        </div>
+        <input type="range" id="threshold-slider" min="0" max="1" step="0.01" value="0.5">
+      </div>
+
+      <!-- Gap Tolerance -->
+      <div class="slider-row">
+        <div class="slider-header">
+          <label for="gap-slider">Gap Tolerance</label>
+          <span class="tooltip-icon">?
+            <span class="tooltip-card">Maximum gap (in seconds) between high-confidence frames that will still be merged into a single segment. Prevents brief dips from splitting one continuous event into many fragments.</span>
+          </span>
+          <span class="slider-value" id="gap-value">2.0s</span>
+        </div>
+        <input type="range" id="gap-slider" min="0" max="10" step="0.1" value="2.0">
+      </div>
+
+      <!-- Min Duration -->
+      <div class="slider-row">
+        <div class="slider-header">
+          <label for="mindur-slider">Min Duration</label>
+          <span class="tooltip-icon">?
+            <span class="tooltip-card">Shortest segment duration to report. Segments shorter than this are discarded as noise. Set to 0 to see all detected segments regardless of length.</span>
+          </span>
+          <span class="slider-value" id="mindur-value">1.0s</span>
+        </div>
+        <input type="range" id="mindur-slider" min="0" max="10" step="0.1" value="1.0">
       </div>
     </div>
 
@@ -141,14 +329,30 @@ button:disabled { background: #93b4f5; cursor: not-allowed; }
   <!-- Results Section -->
   <div class="card" id="results-section">
     <h2>Results</h2>
-    <div class="best-match" id="best-match"></div>
-    <div id="score-bars"></div>
+
+    <!-- Temporal Results (shown only in temporal mode) -->
+    <div id="temporal-results">
+      <div class="best-segment-badge" id="best-seg-badge"></div>
+      <div id="chart-container">
+        <canvas id="timeline-chart"></canvas>
+      </div>
+      <div id="seg-table-wrap"></div>
+    </div>
+
+    <!-- Standard Results -->
+    <div id="standard-results">
+      <div class="best-match" id="best-match"></div>
+      <div id="score-bars"></div>
+    </div>
+
     <div class="meta-info" id="meta-info"></div>
   </div>
 </div>
 
 <script>
 (function () {
+  var LABEL_COLORS = ['#2563eb','#dc2626','#16a34a','#d97706','#7c3aed','#0891b2','#be185d','#65a30d','#6366f1','#ea580c'];
+
   var modelSelect = document.getElementById('model-select');
   var loadBtn = document.getElementById('load-btn');
   var statusDot = document.getElementById('status-dot');
@@ -164,9 +368,29 @@ button:disabled { background: #93b4f5; cursor: not-allowed; }
   var bestMatchEl = document.getElementById('best-match');
   var scoreBars = document.getElementById('score-bars');
   var metaInfo = document.getElementById('meta-info');
+  var temporalPanel = document.getElementById('temporal-panel');
+  var temporalResults = document.getElementById('temporal-results');
+  var standardResults = document.getElementById('standard-results');
+  var bestSegBadge = document.getElementById('best-seg-badge');
+  var segTableWrap = document.getElementById('seg-table-wrap');
+
+  var thresholdSlider = document.getElementById('threshold-slider');
+  var thresholdValue = document.getElementById('threshold-value');
+  var thresholdDefaultTag = document.getElementById('threshold-default-tag');
+  var thresholdTooltipCard = document.getElementById('threshold-tooltip-card');
+  var gapSlider = document.getElementById('gap-slider');
+  var gapValue = document.getElementById('gap-value');
+  var mindurSlider = document.getElementById('mindur-slider');
+  var mindurValue = document.getElementById('mindur-value');
 
   var modelLoaded = false;
+  var temporalDefaults = null;
+  var thresholdDirty = false;
+  var activeChart = null;
 
+  // -------------------------
+  // Status helpers
+  // -------------------------
   function setStatus(state, text) {
     statusDot.className = 'dot dot-' + state;
     statusText.textContent = text;
@@ -182,7 +406,72 @@ button:disabled { background: #93b4f5; cursor: not-allowed; }
     return span;
   }
 
+  // -------------------------
+  // Temporal defaults
+  // -------------------------
+  function fetchTemporalDefaults() {
+    fetch('/api/v1/models/active')
+      .then(function (r) { if (!r.ok) throw new Error('no active model'); return r.json(); })
+      .then(function (data) {
+        temporalDefaults = data.temporal_defaults || null;
+        applyTemporalDefaults();
+      })
+      .catch(function () {
+        temporalDefaults = null;
+      });
+  }
+
+  function applyTemporalDefaults() {
+    if (!temporalDefaults) return;
+    var defaultThresh = temporalDefaults.threshold;
+    if (typeof defaultThresh === 'number') {
+      thresholdSlider.value = defaultThresh;
+      thresholdValue.textContent = defaultThresh.toFixed(2);
+    }
+    // Update tooltip text based on threshold_mode
+    if (temporalDefaults.threshold_mode === 'relative') {
+      thresholdTooltipCard.textContent = 'Minimum confidence for event detection. Softmax scores are relative to the label set — optimal threshold depends on how many labels you provide.';
+    } else {
+      thresholdTooltipCard.textContent = 'Minimum confidence for event detection. SigLip2 sigmoid scores are directly interpretable — 0.5 means the model is neutral. Higher = stricter.';
+    }
+    // Reset dirty state — just loaded defaults
+    thresholdDirty = false;
+    thresholdDefaultTag.style.display = '';
+  }
+
+  // -------------------------
+  // Aggregation toggle
+  // -------------------------
+  aggSelect.addEventListener('change', function () {
+    if (aggSelect.value === 'temporal') {
+      temporalPanel.style.display = 'block';
+    } else {
+      temporalPanel.style.display = 'none';
+    }
+  });
+
+  // -------------------------
+  // Slider listeners
+  // -------------------------
+  thresholdSlider.addEventListener('input', function () {
+    thresholdValue.textContent = parseFloat(thresholdSlider.value).toFixed(2);
+    if (!thresholdDirty) {
+      thresholdDirty = true;
+      thresholdDefaultTag.style.display = 'none';
+    }
+  });
+
+  gapSlider.addEventListener('input', function () {
+    gapValue.textContent = parseFloat(gapSlider.value).toFixed(1) + 's';
+  });
+
+  mindurSlider.addEventListener('input', function () {
+    mindurValue.textContent = parseFloat(mindurSlider.value).toFixed(1) + 's';
+  });
+
+  // -------------------------
   // Fetch models on page load
+  // -------------------------
   fetch('/api/v1/models')
     .then(function (r) { return r.json(); })
     .then(function (models) {
@@ -194,6 +483,7 @@ button:disabled { background: #93b4f5; cursor: not-allowed; }
         if (m.loaded) {
           opt.selected = true;
           setStatus('loaded', 'Loaded: ' + m.display_name);
+          fetchTemporalDefaults();
         }
       });
     })
@@ -201,7 +491,9 @@ button:disabled { background: #93b4f5; cursor: not-allowed; }
       setStatus('none', 'Failed to fetch models');
     });
 
+  // -------------------------
   // Load model
+  // -------------------------
   loadBtn.addEventListener('click', function () {
     var modelId = modelSelect.value;
     if (!modelId) return;
@@ -223,6 +515,10 @@ button:disabled { background: #93b4f5; cursor: not-allowed; }
       .then(function () {
         var selected = modelSelect.options[modelSelect.selectedIndex];
         setStatus('loaded', 'Loaded: ' + selected.textContent);
+        // Reset dirty flag and reload defaults for new model
+        thresholdDirty = false;
+        thresholdDefaultTag.style.display = '';
+        fetchTemporalDefaults();
       })
       .catch(function (err) {
         setStatus('none', 'Error: ' + err.message);
@@ -233,7 +529,9 @@ button:disabled { background: #93b4f5; cursor: not-allowed; }
       });
   });
 
+  // -------------------------
   // Parse labels
+  // -------------------------
   function parseLabels(raw) {
     raw = raw.trim();
     if (!raw) return [];
@@ -243,7 +541,9 @@ button:disabled { background: #93b4f5; cursor: not-allowed; }
     return raw.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
   }
 
+  // -------------------------
   // Classify
+  // -------------------------
   classifyBtn.addEventListener('click', function () {
     classifyError.textContent = '';
     resultsSection.style.display = 'none';
@@ -263,6 +563,14 @@ button:disabled { background: #93b4f5; cursor: not-allowed; }
     form.append('prompt_template', promptInput.value);
     form.append('fps', fpsInput.value);
     form.append('aggregation', aggSelect.value);
+
+    if (aggSelect.value === 'temporal') {
+      if (thresholdDirty) {
+        form.append('threshold', thresholdSlider.value);
+      }
+      form.append('gap_tolerance', gapSlider.value);
+      form.append('min_duration', mindurSlider.value);
+    }
 
     classifyBtn.disabled = true;
     classifyBtn.textContent = 'Classifying';
@@ -285,14 +593,53 @@ button:disabled { background: #93b4f5; cursor: not-allowed; }
       });
   });
 
+  // -------------------------
+  // Render results
+  // -------------------------
   function renderResults(data) {
+    // Destroy previous chart if any
+    if (activeChart) {
+      try { activeChart.destroy(); } catch (e) { /* ignore */ }
+      activeChart = null;
+    }
+
+    var isTemporal = data.temporal && aggSelect.value === 'temporal';
+
+    if (isTemporal) {
+      temporalResults.style.display = 'block';
+      standardResults.style.display = 'none';
+      renderTemporal(data.temporal, data.scores);
+    } else {
+      temporalResults.style.display = 'none';
+      standardResults.style.display = 'block';
+      renderStandard(data);
+    }
+
+    var m = data.metadata;
+    // Clear meta-info safely
+    while (metaInfo.firstChild) { metaInfo.removeChild(metaInfo.firstChild); }
+    metaInfo.appendChild(document.createTextNode(
+      'Frames: ' + m.frames_analyzed +
+      ' | Duration: ' + m.video_duration_seconds.toFixed(1) + 's' +
+      ' | Model: ' + m.model +
+      ' | Device: ' + m.device +
+      ' | Aggregation: ' + m.aggregation +
+      ' | Time: ' + m.processing_time_seconds.toFixed(2) + 's'
+    ));
+
+    resultsSection.style.display = 'block';
+  }
+
+  function renderStandard(data) {
     var scores = data.scores.slice().sort(function (a, b) { return b.confidence - a.confidence; });
     var maxConf = scores.length ? scores[0].confidence : 1;
 
-    bestMatchEl.textContent = 'Best match: ' + data.best_match.label +
-      ' (' + (data.best_match.confidence * 100).toFixed(1) + '%)';
+    while (bestMatchEl.firstChild) { bestMatchEl.removeChild(bestMatchEl.firstChild); }
+    bestMatchEl.appendChild(document.createTextNode(
+      'Best match: ' + data.best_match.label +
+      ' (' + (data.best_match.confidence * 100).toFixed(1) + '%)'
+    ));
 
-    // Clear previous results
     while (scoreBars.firstChild) { scoreBars.removeChild(scoreBars.firstChild); }
 
     scores.forEach(function (s) {
@@ -325,17 +672,245 @@ button:disabled { background: #93b4f5; cursor: not-allowed; }
       item.appendChild(track);
       scoreBars.appendChild(item);
     });
+  }
 
-    var m = data.metadata;
-    metaInfo.textContent =
-      'Frames: ' + m.frames_analyzed +
-      ' | Duration: ' + m.video_duration_seconds.toFixed(1) + 's' +
-      ' | Model: ' + m.model +
-      ' | Device: ' + m.device +
-      ' | Aggregation: ' + m.aggregation +
-      ' | Time: ' + m.processing_time_seconds.toFixed(2) + 's';
+  // -------------------------
+  // Render temporal results
+  // -------------------------
+  function renderTemporal(temporal, rawScores) {
+    var segments = temporal.segments || [];
+    var timeline = temporal.timeline || [];
+    var bestSeg = temporal.best_segment || null;
+    var effectiveThresh = typeof temporal.effective_threshold === 'number' ? temporal.effective_threshold : null;
+    var labels = [];
 
-    resultsSection.style.display = 'block';
+    // Collect unique labels from timeline entries
+    if (timeline.length > 0) {
+      var labelSet = {};
+      timeline.forEach(function (entry) {
+        if (entry.scores) {
+          Object.keys(entry.scores).forEach(function (lbl) {
+            labelSet[lbl] = true;
+          });
+        }
+      });
+      labels = Object.keys(labelSet);
+    } else if (rawScores && rawScores.length) {
+      labels = rawScores.map(function (s) { return s.label; });
+    }
+
+    // --- Best segment badge ---
+    while (bestSegBadge.firstChild) { bestSegBadge.removeChild(bestSegBadge.firstChild); }
+    if (bestSeg) {
+      var strong = document.createElement('strong');
+      strong.textContent = 'Strongest burst: ';
+      bestSegBadge.appendChild(strong);
+      bestSegBadge.appendChild(document.createTextNode(
+        bestSeg.label +
+        ' — ' + bestSeg.start_time.toFixed(1) + 's – ' + bestSeg.end_time.toFixed(1) + 's' +
+        ' (peak ' + (bestSeg.peak_score * 100).toFixed(1) + '%)'
+      ));
+    } else {
+      var em = document.createElement('em');
+      em.textContent = 'No best segment detected.';
+      bestSegBadge.appendChild(em);
+    }
+
+    // --- Chart ---
+    var canvas = document.getElementById('timeline-chart');
+    // Reset canvas dimensions to clear stale render
+    canvas.width = canvas.parentElement.clientWidth || 600;
+    canvas.height = 300;
+
+    if (typeof Chart !== 'undefined' && timeline.length > 0) {
+      try {
+        var timeLabels = timeline.map(function (e) { return e.time.toFixed(1) + 's'; });
+
+        var datasets = labels.map(function (lbl, idx) {
+          var color = LABEL_COLORS[idx % LABEL_COLORS.length];
+          return {
+            label: lbl,
+            data: timeline.map(function (e) {
+              return e.scores && typeof e.scores[lbl] === 'number' ? parseFloat((e.scores[lbl] * 100).toFixed(2)) : null;
+            }),
+            borderColor: color,
+            backgroundColor: color + '22',
+            borderWidth: 2,
+            pointRadius: 0,
+            tension: 0.3,
+            fill: false,
+            spanGaps: true
+          };
+        });
+
+        var thresholdPlugin = {
+          id: 'thresholdLine',
+          afterDraw: function (chart) {
+            if (effectiveThresh === null) return;
+            var ctx = chart.ctx;
+            var yAxis = chart.scales.y;
+            var xAxis = chart.scales.x;
+            if (!yAxis || !xAxis) return;
+            var yPx = yAxis.getPixelForValue(effectiveThresh * 100);
+            ctx.save();
+            ctx.setLineDash([6, 4]);
+            ctx.strokeStyle = '#ef4444';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(xAxis.left, yPx);
+            ctx.lineTo(xAxis.right, yPx);
+            ctx.stroke();
+            ctx.restore();
+          }
+        };
+
+        activeChart = new Chart(canvas, {
+          type: 'line',
+          data: { labels: timeLabels, datasets: datasets },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            scales: {
+              x: {
+                ticks: {
+                  maxTicksLimit: 10,
+                  font: { size: 11 }
+                }
+              },
+              y: {
+                min: 0,
+                max: 100,
+                ticks: {
+                  font: { size: 11 },
+                  callback: function (v) { return v + '%'; }
+                }
+              }
+            },
+            plugins: {
+              legend: {
+                position: 'top',
+                labels: { font: { size: 11 }, boxWidth: 12 }
+              },
+              tooltip: {
+                callbacks: {
+                  label: function (ctx) {
+                    return ctx.dataset.label + ': ' + (ctx.parsed.y !== null ? ctx.parsed.y.toFixed(1) + '%' : 'N/A');
+                  }
+                }
+              }
+            }
+          },
+          plugins: [thresholdPlugin]
+        });
+      } catch (e) {
+        // Fallback if Chart.js fails
+        while (canvas.parentElement.firstChild) { canvas.parentElement.removeChild(canvas.parentElement.firstChild); }
+        var msg = document.createElement('p');
+        msg.textContent = 'Chart could not be rendered: ' + (e.message || 'unknown error');
+        msg.style.color = '#9ca3af';
+        msg.style.fontSize = '0.85rem';
+        canvas.parentElement.appendChild(msg);
+      }
+    } else if (timeline.length === 0) {
+      while (canvas.parentElement.firstChild) { canvas.parentElement.removeChild(canvas.parentElement.firstChild); }
+      var noData = document.createElement('p');
+      noData.textContent = 'No timeline data available.';
+      noData.style.color = '#9ca3af';
+      noData.style.fontSize = '0.85rem';
+      canvas.parentElement.appendChild(noData);
+    }
+
+    // --- Segment table ---
+    while (segTableWrap.firstChild) { segTableWrap.removeChild(segTableWrap.firstChild); }
+
+    if (segments.length === 0) {
+      var noSegMsg = document.createElement('p');
+      noSegMsg.className = 'no-segments-msg';
+      noSegMsg.textContent = 'No segments detected above threshold.';
+      segTableWrap.appendChild(noSegMsg);
+      return;
+    }
+
+    // Sort by start_time
+    var sortedSegs = segments.slice().sort(function (a, b) { return a.start_time - b.start_time; });
+
+    // Build label-to-color map
+    var labelColorMap = {};
+    labels.forEach(function (lbl, idx) {
+      labelColorMap[lbl] = LABEL_COLORS[idx % LABEL_COLORS.length];
+    });
+
+    var table = document.createElement('table');
+    table.className = 'seg-table';
+
+    var thead = document.createElement('thead');
+    var headerRow = document.createElement('tr');
+    var headers = ['Label', 'Start', 'End', 'Duration', 'Active Avg', 'Coverage', 'Peak', 'Peak Time'];
+    headers.forEach(function (h) {
+      var th = document.createElement('th');
+      th.textContent = h;
+      headerRow.appendChild(th);
+    });
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    var tbody = document.createElement('tbody');
+    sortedSegs.forEach(function (seg) {
+      var tr = document.createElement('tr');
+      var color = labelColorMap[seg.label] || '#6b7280';
+      tr.style.borderLeft = '3px solid ' + color;
+
+      // Label cell with color swatch
+      var tdLabel = document.createElement('td');
+      var swatch = document.createElement('span');
+      swatch.className = 'seg-color-swatch';
+      swatch.style.background = color;
+      tdLabel.appendChild(swatch);
+      tdLabel.appendChild(document.createTextNode(seg.label));
+
+      var tdStart = document.createElement('td');
+      tdStart.textContent = seg.start_time.toFixed(2) + 's';
+
+      var tdEnd = document.createElement('td');
+      tdEnd.textContent = seg.end_time.toFixed(2) + 's';
+
+      var tdDur = document.createElement('td');
+      tdDur.textContent = seg.duration.toFixed(2) + 's';
+
+      var tdAvg = document.createElement('td');
+      tdAvg.textContent = typeof seg.active_avg_score === 'number'
+        ? (seg.active_avg_score * 100).toFixed(1) + '%'
+        : 'N/A';
+
+      var tdCov = document.createElement('td');
+      tdCov.textContent = typeof seg.coverage === 'number'
+        ? (seg.coverage * 100).toFixed(1) + '%'
+        : 'N/A';
+
+      var tdPeak = document.createElement('td');
+      tdPeak.textContent = typeof seg.peak_score === 'number'
+        ? (seg.peak_score * 100).toFixed(1) + '%'
+        : 'N/A';
+
+      var tdPeakTime = document.createElement('td');
+      tdPeakTime.textContent = typeof seg.peak_time === 'number'
+        ? seg.peak_time.toFixed(2) + 's'
+        : 'N/A';
+
+      tr.appendChild(tdLabel);
+      tr.appendChild(tdStart);
+      tr.appendChild(tdEnd);
+      tr.appendChild(tdDur);
+      tr.appendChild(tdAvg);
+      tr.appendChild(tdCov);
+      tr.appendChild(tdPeak);
+      tr.appendChild(tdPeakTime);
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+    segTableWrap.appendChild(table);
   }
 })();
 </script>
