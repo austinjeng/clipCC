@@ -124,7 +124,136 @@ def aggregate_temporal(
     temporal_options: "ResolvedTemporalOptions",  # type: ignore[name-defined]
     policy: "TemporalScoringPolicy",  # type: ignore[name-defined]
 ) -> AggregationResult:
-    raise NotImplementedError("aggregate_temporal will be implemented in Task 6")
+    from app.schemas.response import (
+        FrameScore,
+        LabelSummary,
+        Segment,
+        SegmentStats,
+        TemporalResult,
+    )
+
+    detection = policy.detection_scores(ctx)
+    threshold = temporal_options.threshold
+    gap_tol = temporal_options.gap_tolerance
+    min_dur = temporal_options.min_duration
+    tl = ctx.timeline
+
+    timeline_entries = []
+    for i in range(detection.shape[0]):
+        scores_dict = {
+            ctx.labels[j]: round(detection[i, j].item(), 6)
+            for j in range(len(ctx.labels))
+        }
+        timeline_entries.append(
+            FrameScore(timestamp=tl.timestamp(i), frame_index=i, scores=scores_dict)
+        )
+
+    all_segments: list[Segment] = []
+    for j, label in enumerate(ctx.labels):
+        label_scores = detection[:, j]
+        mask = label_scores >= threshold
+
+        raw_segments: list[tuple[int, int]] = []
+        in_segment = False
+        start_idx = 0
+        for i in range(len(mask)):
+            if mask[i] and not in_segment:
+                start_idx = i
+                in_segment = True
+            elif not mask[i] and in_segment:
+                raw_segments.append((start_idx, i - 1))
+                in_segment = False
+        if in_segment:
+            raw_segments.append((start_idx, len(mask) - 1))
+
+        merged: list[tuple[int, int]] = []
+        for seg in raw_segments:
+            if merged and tl.gap_seconds(merged[-1][1], seg[0]) <= gap_tol:
+                merged[-1] = (merged[-1][0], seg[1])
+            else:
+                merged.append(seg)
+
+        for start, end in merged:
+            duration = tl.segment_duration(start, end)
+            if duration < min_dur:
+                continue
+
+            interval_scores = label_scores[start : end + 1]
+            active_mask = interval_scores >= threshold
+            active_scores = interval_scores[active_mask]
+
+            active_dur = sum(
+                tl.intervals[start + k].end - tl.intervals[start + k].start
+                for k in range(end - start + 1)
+                if active_mask[k]
+            )
+
+            peak_val, peak_rel = interval_scores.max(dim=0)
+            peak_idx = start + peak_rel.item()
+
+            all_segments.append(
+                Segment(
+                    label=label,
+                    start_time=tl.timestamp(start),
+                    end_time=tl.intervals[end].end,
+                    duration=round(duration, 6),
+                    stats=SegmentStats(
+                        active_avg=round(active_scores.mean().item(), 6),
+                        interval_avg=round(interval_scores.mean().item(), 6),
+                        coverage_ratio=round(
+                            active_mask.sum().item() / len(interval_scores), 6
+                        ),
+                        active_duration=round(active_dur, 6),
+                    ),
+                    peak_confidence=round(peak_val.item(), 6),
+                    peak_timestamp=tl.timestamp(peak_idx),
+                )
+            )
+
+    label_summaries: list[LabelSummary] = []
+    for label in ctx.labels:
+        label_segs = [s for s in all_segments if s.label == label]
+        total_active = sum(s.stats.active_duration for s in label_segs)
+        total_segment = sum(s.duration for s in label_segs)
+        peak = max((s.peak_confidence for s in label_segs), default=0.0)
+
+        if total_active > 0:
+            dwc = sum(
+                s.stats.active_duration * s.stats.active_avg for s in label_segs
+            ) / total_active
+        else:
+            dwc = 0.0
+
+        label_summaries.append(
+            LabelSummary(
+                label=label,
+                segment_count=len(label_segs),
+                total_active_duration=round(total_active, 6),
+                total_segment_duration=round(total_segment, 6),
+                peak_confidence=round(peak, 6),
+                duration_weighted_confidence=round(dwc, 6),
+            )
+        )
+
+    best_segment = (
+        max(all_segments, key=lambda s: s.peak_confidence) if all_segments else None
+    )
+
+    mean_result = aggregate_mean(ctx)
+
+    return AggregationResult(
+        scores=mean_result.scores,
+        best_match=mean_result.best_match,
+        temporal=TemporalResult(
+            timeline=timeline_entries,
+            segments=all_segments,
+            label_summaries=label_summaries,
+            best_segment=best_segment,
+            threshold_mode=policy.threshold_mode(),
+            effective_threshold=temporal_options.threshold,
+            threshold_was_defaulted=temporal_options.threshold_was_defaulted,
+        ),
+    )
 
 
 def aggregate_frame_scores(
