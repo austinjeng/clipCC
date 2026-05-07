@@ -15,7 +15,8 @@ A new `"temporal"` aggregation mode that produces:
 2. Detected segments (contiguous windows above a configurable threshold)
 3. Built-in visualization (line chart + segment summary table)
 
-Built on three core abstractions that prevent subtle bugs:
+Built on five core abstractions that prevent subtle bugs:
+- **`ScoringContext` / `TemporalScoringContext`** — unified data carrier preserving semantics through aggregation
 - **`TemporalScoringPolicy`** — model-aware threshold semantics
 - **`FrameTimeline`** — centralized timing math
 - **`AggregationResult`** — clean return type replacing brittle tuples
@@ -323,7 +324,7 @@ Located in `app/services/scoring.py`.
 
 ```
 Input:
-  ctx: ScoringContext              # (Finding #8) single data object with all tensors + metadata
+  ctx: TemporalScoringContext       # guarantees timeline is present (see routing in §4)
   temporal_options: ResolvedTemporalOptions  # (Finding #9) fully resolved, no None fields
   policy: TemporalScoringPolicy    # (Finding #1) resolved from ctx.semantics
 
