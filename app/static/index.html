@@ -708,7 +708,7 @@ input[type="range"] {
       bestSegBadge.appendChild(document.createTextNode(
         bestSeg.label +
         ' — ' + bestSeg.start_time.toFixed(1) + 's – ' + bestSeg.end_time.toFixed(1) + 's' +
-        ' (peak ' + (bestSeg.peak_score * 100).toFixed(1) + '%)'
+        ' (peak ' + (bestSeg.peak_confidence * 100).toFixed(1) + '%)'
       ));
     } else {
       var em = document.createElement('em');
@@ -717,14 +717,17 @@ input[type="range"] {
     }
 
     // --- Chart ---
-    var canvas = document.getElementById('timeline-chart');
-    // Reset canvas dimensions to clear stale render
-    canvas.width = canvas.parentElement.clientWidth || 600;
+    var chartContainer = document.getElementById('chart-container');
+    while (chartContainer.firstChild) { chartContainer.removeChild(chartContainer.firstChild); }
+    var canvas = document.createElement('canvas');
+    canvas.id = 'timeline-chart';
+    chartContainer.appendChild(canvas);
+    canvas.width = chartContainer.clientWidth || 600;
     canvas.height = 300;
 
     if (typeof Chart !== 'undefined' && timeline.length > 0) {
       try {
-        var timeLabels = timeline.map(function (e) { return e.time.toFixed(1) + 's'; });
+        var timeLabels = timeline.map(function (e) { return e.timestamp.toFixed(1) + 's'; });
 
         var datasets = labels.map(function (lbl, idx) {
           var color = LABEL_COLORS[idx % LABEL_COLORS.length];
@@ -805,20 +808,20 @@ input[type="range"] {
         });
       } catch (e) {
         // Fallback if Chart.js fails
-        while (canvas.parentElement.firstChild) { canvas.parentElement.removeChild(canvas.parentElement.firstChild); }
+        while (chartContainer.firstChild) { chartContainer.removeChild(chartContainer.firstChild); }
         var msg = document.createElement('p');
         msg.textContent = 'Chart could not be rendered: ' + (e.message || 'unknown error');
         msg.style.color = '#9ca3af';
         msg.style.fontSize = '0.85rem';
-        canvas.parentElement.appendChild(msg);
+        chartContainer.appendChild(msg);
       }
     } else if (timeline.length === 0) {
-      while (canvas.parentElement.firstChild) { canvas.parentElement.removeChild(canvas.parentElement.firstChild); }
+      while (chartContainer.firstChild) { chartContainer.removeChild(chartContainer.firstChild); }
       var noData = document.createElement('p');
       noData.textContent = 'No timeline data available.';
       noData.style.color = '#9ca3af';
       noData.style.fontSize = '0.85rem';
-      canvas.parentElement.appendChild(noData);
+      chartContainer.appendChild(noData);
     }
 
     // --- Segment table ---
@@ -879,23 +882,23 @@ input[type="range"] {
       tdDur.textContent = seg.duration.toFixed(2) + 's';
 
       var tdAvg = document.createElement('td');
-      tdAvg.textContent = typeof seg.active_avg_score === 'number'
-        ? (seg.active_avg_score * 100).toFixed(1) + '%'
+      tdAvg.textContent = seg.stats && typeof seg.stats.active_avg === 'number'
+        ? (seg.stats.active_avg * 100).toFixed(1) + '%'
         : 'N/A';
 
       var tdCov = document.createElement('td');
-      tdCov.textContent = typeof seg.coverage === 'number'
-        ? (seg.coverage * 100).toFixed(1) + '%'
+      tdCov.textContent = seg.stats && typeof seg.stats.coverage_ratio === 'number'
+        ? (seg.stats.coverage_ratio * 100).toFixed(1) + '%'
         : 'N/A';
 
       var tdPeak = document.createElement('td');
-      tdPeak.textContent = typeof seg.peak_score === 'number'
-        ? (seg.peak_score * 100).toFixed(1) + '%'
+      tdPeak.textContent = typeof seg.peak_confidence === 'number'
+        ? (seg.peak_confidence * 100).toFixed(1) + '%'
         : 'N/A';
 
       var tdPeakTime = document.createElement('td');
-      tdPeakTime.textContent = typeof seg.peak_time === 'number'
-        ? seg.peak_time.toFixed(2) + 's'
+      tdPeakTime.textContent = typeof seg.peak_timestamp === 'number'
+        ? seg.peak_timestamp.toFixed(2) + 's'
         : 'N/A';
 
       tr.appendChild(tdLabel);
