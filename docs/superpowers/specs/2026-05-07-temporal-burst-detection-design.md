@@ -31,20 +31,25 @@ Built on three core abstractions that prevent subtle bugs:
 ```python
 @dataclass
 class ScoringContext:
+    """Base scoring context for mean/max aggregation."""
     confidence: torch.Tensor      # (n_frames, n_labels) — concatenated from all batches
     raw_similarity: torch.Tensor  # (n_frames, n_labels)
     logits: torch.Tensor          # (n_frames, n_labels)
     semantics: str                # from ScoreBatch.semantics (validated same across batches)
     labels: list[str]
     frames: list[FrameSample]
-    timeline: FrameTimeline | None = None
 
     @classmethod
     def from_batches(cls, batches: list[ScoreBatch], labels: list[str],
-                     frames: list[FrameSample],
-                     timeline: FrameTimeline | None = None) -> "ScoringContext":
+                     frames: list[FrameSample]) -> "ScoringContext":
+        if not batches:
+            raise ValueError("Cannot build ScoringContext from empty batch list")
         semantics_set = {b.semantics for b in batches}
-        assert len(semantics_set) == 1, "Mixed model semantics in single request"
+        if len(semantics_set) != 1:
+            raise ValueError(
+                f"Mixed model semantics in single request: {semantics_set}. "
+                "All batches must come from the same model."
+            )
         return cls(
             confidence=torch.cat([b.confidence for b in batches], dim=0),
             raw_similarity=torch.cat([b.raw_similarity for b in batches], dim=0),
@@ -52,11 +57,27 @@ class ScoringContext:
             semantics=semantics_set.pop(),
             labels=labels,
             frames=frames,
+        )
+
+@dataclass
+class TemporalScoringContext(ScoringContext):
+    """Extended context for temporal aggregation — guarantees timeline is present."""
+    timeline: FrameTimeline  # non-optional
+
+    @classmethod
+    def from_base(cls, ctx: ScoringContext, timeline: FrameTimeline) -> "TemporalScoringContext":
+        return cls(
+            confidence=ctx.confidence,
+            raw_similarity=ctx.raw_similarity,
+            logits=ctx.logits,
+            semantics=ctx.semantics,
+            labels=ctx.labels,
+            frames=ctx.frames,
             timeline=timeline,
         )
 ```
 
-All aggregators receive `ScoringContext` as their single data argument. The policy reads `ctx.semantics` and operates on `ctx.confidence` or `ctx.logits` as appropriate.
+`aggregate_mean` and `aggregate_max` receive `ScoringContext`. `aggregate_temporal` receives `TemporalScoringContext` — type-level guarantee that timeline exists, fails fast at construction if absent. The policy reads `ctx.semantics` and operates on `ctx.confidence` or `ctx.logits` as appropriate.
 
 ### 2. `TemporalScoringPolicy`
 
@@ -374,17 +395,44 @@ Pure tensor operations on already-computed per-frame scores. No additional model
 
 Radio button group: `Mean | Max | Temporal`. Selecting "Temporal" reveals the parameter panel with animation.
 
+### Temporal Defaults from Model Metadata
+
+**Problem (Finding #13):** The threshold slider default should come from the model's policy, but the UI needs this *before* submitting a classify request. If the UI always sends its slider value, the server can never distinguish "user chose 0.5" from "UI sent the default 0.5."
+
+**Solution:** Expose `temporal_defaults` on the existing `/api/v1/models/active` endpoint:
+
+```json
+{
+  "model_id": "siglip2-base-patch16-256",
+  "display_name": "SigLip2 Base 256",
+  "model_type": "siglip2",
+  ...
+  "temporal_defaults": {
+    "threshold": 0.5,
+    "threshold_mode": "absolute",
+    "gap_tolerance": 2.0,
+    "min_duration": 1.0
+  }
+}
+```
+
+**UI behavior:**
+1. On model load/change, UI fetches `/api/v1/models/active` and reads `temporal_defaults`.
+2. Sliders initialize to these values. A `dirty` flag per slider tracks whether the user has touched it.
+3. On submit: only include `threshold` in the request if the user explicitly moved the slider. If untouched, omit it — the server uses the policy default and `threshold_was_defaulted=true`.
+4. After response: the chart draws the threshold line from `temporal.effective_threshold` (authoritative source).
+
 ### Temporal Parameter Panel
 
 Three sliders, each with a `(i)` tooltip icon:
 
 | Slider | Range | Default | Step | Tooltip |
 |--------|-------|---------|------|---------|
-| Confidence Threshold | 0.0 - 1.0 | *(from policy)* | 0.01 | Dynamic based on `threshold_mode`: **absolute** → "Minimum confidence for event detection. SigLip2 sigmoid scores are directly interpretable — 0.5 means the model is neutral. Higher = stricter." **relative** → "Minimum confidence for event detection. Softmax scores are relative to the label set — optimal threshold depends on how many labels you provide." |
+| Confidence Threshold | 0.0 - 1.0 | *(from `temporal_defaults.threshold`)* | 0.01 | Dynamic based on `threshold_mode`: **absolute** → "Minimum confidence for event detection. SigLip2 sigmoid scores are directly interpretable — 0.5 means the model is neutral. Higher = stricter." **relative** → "Minimum confidence for event detection. Softmax scores are relative to the label set — optimal threshold depends on how many labels you provide." |
 | Gap Tolerance | 0.0 - 10.0s | 2.0s | 0.1 | "Maximum gap (in seconds) between high-confidence frames that will still be merged into a single segment. Prevents brief dips from splitting one continuous event into many fragments." |
 | Min Duration | 0.0 - 10.0s | 1.0s | 0.1 | "Shortest segment duration to report. Segments shorter than this are discarded as noise. Set to 0 to see all detected segments regardless of length." |
 
-The threshold slider's default value is set from the API response's `threshold_mode` / policy default, not hardcoded.
+Threshold slider shows a subtle "(model default)" label when untouched; label disappears once the user moves it.
 
 Tooltip interaction: hover/tap the icon → floating card appears. Dismissed on mouse-out or tap elsewhere.
 
@@ -436,26 +484,25 @@ Unchanged from current behavior.
 
 | File | Change |
 |------|--------|
-| `app/main.py` | Parse `RawTemporalParams`, validate (reject if non-temporal), build `FrameTimeline`, resolve policy from semantics, resolve `ResolvedTemporalOptions`, pass to aggregator |
-| `app/services/scoring.py` | Add `ScoringContext`, `AggregationResult`, `aggregate_temporal()`, aggregator registry. Existing `aggregate_mean`/`aggregate_max` accept `ScoringContext`, return `AggregationResult`. Update all callers. |
+| `app/main.py` | Parse `RawTemporalParams`, validate (reject if non-temporal), build `FrameTimeline`, resolve policy from semantics, resolve `ResolvedTemporalOptions`, construct `TemporalScoringContext`, pass to aggregator. Extend `/api/v1/models/active` to include `temporal_defaults`. |
+| `app/services/scoring.py` | Add `ScoringContext`, `TemporalScoringContext`, `AggregationResult`, `aggregate_temporal()`, aggregator registry. Existing `aggregate_mean`/`aggregate_max` accept `ScoringContext`, return `AggregationResult`. Update all callers. |
 | `app/schemas/response.py` | Add `FrameScore`, `SegmentStats`, `Segment`, `LabelSummary`, `TemporalResult`, `RawTemporalParams`, `ResolvedTemporalOptions` models. Add `temporal` field to `ClassifyResponse`. |
 | `app/config.py` | Default values and bounds for temporal params |
 | `app/models/siglip2_model.py` | Import and use `ScoreSemantics.SIGLIP2_SIGMOID` constant instead of string literal |
 | `app/models/clip_model.py` | Import and use `ScoreSemantics.CLIP_RELATIVE_SOFTMAX` constant instead of string literal |
-| `static/index.html` | Radio buttons, sliders with dynamic tooltips (threshold default from API response), Chart.js chart with table-only fallback, segment table with SegmentStats columns, best segment badge |
+| `app/models/model_manager.py` | Expose `temporal_defaults` via policy lookup when returning active model metadata |
+| `static/index.html` | Radio buttons, sliders with dirty-tracking (omit threshold if untouched), fetch `temporal_defaults` on model change, Chart.js chart with table-only fallback, segment table with SegmentStats columns, best segment badge |
 
 ### Unchanged
 
-- `app/models/siglip2_model.py`
 - `app/models/base_model.py`
 - `app/services/video.py`
-- `app/models/model_manager.py`
 - `app/inference_runner.py`
 
 ### Tests
 
 - `tests/test_temporal_policy.py` — policy selection from semantics constants, default thresholds, detection score extraction from `ScoringContext`, unknown semantics raises `ValueError`
 - `tests/test_frame_timeline.py` — interval construction, gap calculation, duration math, video_duration clamping, single-frame edge case, active_duration computation
-- `tests/test_scoring.py` — `ScoringContext.from_batches()` concatenation + semantics validation, `AggregationResult` return type for all modes, `aggregate_temporal()` segment detection, gap bridging, min duration, SegmentStats (active_avg vs interval_avg vs active_duration), label summaries (total_active_duration uses active frame intervals), best_segment selection
-- `tests/test_api.py` — temporal endpoint response shape, 422 on temporal params with non-temporal mode, `RawTemporalParams` → `ResolvedTemporalOptions` resolution, threshold default from policy, `effective_threshold` and `threshold_was_defaulted` in response
-- `tests/test_integration.py` — end-to-end temporal flow
+- `tests/test_scoring.py` — `ScoringContext.from_batches()` (empty batches raises `ValueError`, mixed semantics raises `ValueError`, single batch works, multi-batch concatenation correct). `TemporalScoringContext.from_base()` construction. `AggregationResult` return type for all modes. `aggregate_temporal()` segment detection, gap bridging, min duration, SegmentStats (active_avg vs interval_avg vs active_duration), label summaries (total_active_duration uses active frame intervals not segment spans), best_segment selection, `duration_weighted_confidence` weights by active_duration.
+- `tests/test_api.py` — temporal endpoint response shape, 422 on temporal params with non-temporal mode, `RawTemporalParams` → `ResolvedTemporalOptions` resolution, threshold default from policy when omitted, `effective_threshold` and `threshold_was_defaulted` in response, `/api/v1/models/active` returns `temporal_defaults`
+- `tests/test_integration.py` — end-to-end temporal flow with threshold omitted (uses default) and with threshold specified (user override)
