@@ -193,15 +193,9 @@ class AggregationResult:
     temporal: TemporalResult | None = None
 ```
 
-**Aggregator routing** replaces the if/else chain with a registry. All aggregators receive `ScoringContext` + optional `ResolvedTemporalOptions`:
+**Aggregator routing** replaces the if/else chain with explicit branching per context type:
 
 ```python
-AGGREGATORS = {
-    "mean": aggregate_mean,
-    "max": aggregate_max,
-    "temporal": aggregate_temporal,
-}
-
 def aggregate_frame_scores(
     batches: list[ScoreBatch],
     labels: list[str],
@@ -211,13 +205,20 @@ def aggregate_frame_scores(
     timeline: FrameTimeline | None = None,
     policy: TemporalScoringPolicy | None = None,
 ) -> AggregationResult:
-    ctx = ScoringContext.from_batches(batches, labels, frames, timeline)
+    ctx = ScoringContext.from_batches(batches, labels, frames)
 
-    aggregator = AGGREGATORS[aggregation]
-    return aggregator(ctx, temporal_options=temporal_options, policy=policy)
+    if aggregation == "temporal":
+        if timeline is None or policy is None or temporal_options is None:
+            raise ValueError("Temporal aggregation requires timeline, policy, and temporal_options")
+        temporal_ctx = TemporalScoringContext.from_base(ctx, timeline)
+        return aggregate_temporal(temporal_ctx, temporal_options=temporal_options, policy=policy)
+    elif aggregation == "max":
+        return aggregate_max(ctx)
+    else:
+        return aggregate_mean(ctx)
 ```
 
-Mean and max aggregators ignore the temporal-only params and return `AggregationResult(scores, best_match, temporal=None)`.
+Mean and max receive `ScoringContext`. Temporal receives `TemporalScoringContext` — type-level guarantee enforced at the routing boundary.
 
 ## API Changes
 
