@@ -24,6 +24,7 @@ from app.errors.handlers import (
     InvalidFpsError,
     InvalidLabelsError,
     InvalidPromptTemplateError,
+    InvalidTemporalParamsError,
     TokenTruncationError,
     UnsupportedFormatError,
 )
@@ -35,9 +36,13 @@ from app.schemas.response import (
     ClassifyMetadata,
     ClassifyResponse,
     HealthResponse,
+    RawTemporalParams,
     ReadyResponse,
+    ResolvedTemporalOptions,
 )
+from app.services.frame_timeline import FrameTimeline
 from app.services.scoring import aggregate_frame_scores
+from app.services.temporal_policy import get_policy
 from app.services.video import FrameExtractor, probe_video, validate_video_constraints
 from app.temp_store import TempStore
 
@@ -141,6 +146,29 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
         if manager.active_model is None:
             return JSONResponse(status_code=404, content={"detail": "No model loaded"})
         config = manager.registry[manager.active_model_id]
+
+        from app.services.temporal_policy import ScoreSemantics
+
+        model = manager.active_model
+        semantics_str = ""
+        if model.model_type == "siglip2":
+            semantics_str = ScoreSemantics.SIGLIP2_SIGMOID
+        elif model.model_type == "clip":
+            semantics_str = ScoreSemantics.CLIP_RELATIVE_SOFTMAX
+
+        temporal_defaults = None
+        if semantics_str:
+            try:
+                policy = get_policy(semantics_str)
+                temporal_defaults = {
+                    "threshold": policy.default_threshold(),
+                    "threshold_mode": policy.threshold_mode(),
+                    "gap_tolerance": 2.0,
+                    "min_duration": 1.0,
+                }
+            except ValueError:
+                pass
+
         return {
             "model_id": config.model_id,
             "display_name": config.display_name,
@@ -148,6 +176,7 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
             "params": config.params,
             "resolution": config.resolution,
             "device": manager.active_model.device,
+            "temporal_defaults": temporal_defaults,
         }
 
     @app.get("/")
@@ -161,6 +190,9 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
         prompt_template: str = Form(default="This is a photo of {}."),
         fps: float = Form(default=1.0),
         aggregation: str = Form(default="mean"),
+        threshold: float | None = Form(default=None, ge=0.0, le=1.0),
+        gap_tolerance: float | None = Form(default=None, ge=0.0, le=10.0),
+        min_duration: float | None = Form(default=None, ge=0.0, le=10.0),
     ):
         manager: Optional[ModelManager] = state.get("manager")
         temp_store: Optional[TempStore] = state.get("temp_store")
@@ -174,8 +206,16 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
         if fps < 0.1 or fps > 5.0:
             raise InvalidFpsError(fps)
 
-        if aggregation not in ("mean", "max"):
+        if aggregation not in ("mean", "max", "temporal"):
             raise InvalidAggregationError(aggregation)
+
+        raw_temporal = RawTemporalParams(
+            threshold=threshold,
+            gap_tolerance=gap_tolerance,
+            min_duration=min_duration,
+        )
+        if aggregation != "temporal" and raw_temporal.has_any():
+            raise InvalidTemporalParamsError()
 
         try:
             parsed_labels = json.loads(labels)
@@ -242,6 +282,10 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
                     video_info = probe_video(stored.path, timeout=settings.ffmpeg_timeout_seconds)
                     validate_video_constraints(video_info, settings, fps)
 
+                    temporal_opts = None
+                    timeline = None
+                    policy = None
+
                     async with gates.inference_admission():
                         runner = InferenceRunner(timeout_seconds=settings.request_timeout_seconds)
 
@@ -284,8 +328,19 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
 
                         all_batches, all_frames = result
 
+                        if aggregation == "temporal":
+                            batch_semantics = all_batches[0].semantics if all_batches else ""
+                            policy = get_policy(batch_semantics)
+                            temporal_opts = ResolvedTemporalOptions.resolve(
+                                raw_temporal, policy.default_threshold()
+                            )
+                            timeline = FrameTimeline(all_frames, fps, video_info.duration)
+
                     agg_result = aggregate_frame_scores(
-                        all_batches, parsed_labels, all_frames, aggregation
+                        all_batches, parsed_labels, all_frames, aggregation,
+                        temporal_options=temporal_opts,
+                        timeline=timeline,
+                        policy=policy,
                     )
 
                     processing_time = time.monotonic() - start_time
