@@ -183,6 +183,13 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
     async def serve_ui():
         return FileResponse(STATIC_DIR / "index.html")
 
+    @app.get("/static/vendor/{filename}")
+    async def serve_vendor(filename: str):
+        path = STATIC_DIR / "vendor" / filename
+        if not path.exists():
+            return JSONResponse(status_code=404, content={"detail": "Not found"})
+        return FileResponse(path)
+
     @app.post("/api/v1/classify", response_model=ClassifyResponse)
     async def classify(
         video: UploadFile,
