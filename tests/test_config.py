@@ -49,3 +49,14 @@ def test_validate_auth_config_passes_with_key() -> None:
 def test_validate_auth_config_passes_with_flag() -> None:
     s = Settings(api_key=None, allow_unauthenticated=True)
     s.validate_auth_config()  # should not raise
+
+
+def test_default_model_id_default():
+    s = Settings(allow_unauthenticated=True)
+    assert s.default_model_id == "siglip2-base-patch16-256"
+
+
+def test_default_model_id_from_env(monkeypatch):
+    monkeypatch.setenv("DEFAULT_MODEL_ID", "siglip2-large-patch16-384")
+    s = Settings(allow_unauthenticated=True)
+    assert s.default_model_id == "siglip2-large-patch16-384"

@@ -121,3 +121,11 @@ class UploadConcurrencyError(Exception):
 
 class InferenceConcurrencyError(Exception):
     pass
+
+
+class InvalidTemporalParamsError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=422,
+            detail="Parameters 'threshold', 'gap_tolerance', 'min_duration' are only valid with aggregation='temporal'.",
+        )

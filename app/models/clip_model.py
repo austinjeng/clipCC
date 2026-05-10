@@ -1,10 +1,15 @@
 import open_clip
 import torch
 from PIL import Image
+from app.models.base_model import BaseModel, ScoreBatch
+from app.services.temporal_policy import ScoreSemantics
 from app.models.model_spec import ModelSpec
 
 
-class ClipModel:
+class ClipModel(BaseModel):
+    model_type = "clip"
+    max_token_length = 77
+
     def __init__(self, spec: ModelSpec):
         self.spec = spec
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -31,6 +36,38 @@ class ClipModel:
                     return self.model.encode_image(batch, normalize=True)
             return self.model.encode_image(batch, normalize=True)
 
+    def score_batch(self, images: list[Image.Image], texts: list[str]) -> ScoreBatch:
+        text_features = self.encode_text(texts)
+        image_features = self.encode_images(images)
+        logit_scale = self.model.logit_scale.exp().item()
+        raw_similarity = image_features @ text_features.T
+        logits = raw_similarity * logit_scale
+        confidence = torch.softmax(logits, dim=-1)
+        return ScoreBatch(
+            confidence=confidence,
+            raw_similarity=raw_similarity,
+            logits=logits,
+            semantics=ScoreSemantics.CLIP_RELATIVE_SOFTMAX,
+        )
+
+    def validate_prompts(self, prompts: list[str]) -> list[int]:
+        counts = []
+        for prompt in prompts:
+            if hasattr(self.tokenizer, "encode"):
+                raw = self.tokenizer.encode(prompt)
+                counts.append(len(raw))
+            else:
+                tokens = self.tokenizer([prompt])[0]
+                nonzero = (tokens != 0).sum().item()
+                counts.append(nonzero)
+        return counts
+
+    def tokenize_for_inference(self, prompts: list[str]) -> torch.Tensor:
+        return self.tokenizer(prompts).to(self.device)
+
+    def tokenize_raw(self, prompts: list[str]) -> list[torch.Tensor]:
+        return [self.tokenizer([p])[0] for p in prompts]
+
     def compute_similarities(
         self, images: list[Image.Image], texts: list[str]
     ) -> tuple[torch.Tensor, float]:
@@ -41,17 +78,4 @@ class ClipModel:
         return cosine_sim, logit_scale
 
     def tokenize_and_check(self, prompts: list[str], max_tokens: int = 77) -> list[int]:
-        counts = []
-        for prompt in prompts:
-            # Use the underlying encode() to get raw token count before truncation
-            if hasattr(self.tokenizer, "encode"):
-                raw = self.tokenizer.encode(prompt)
-                counts.append(len(raw))
-            else:
-                tokens = self.tokenizer([prompt])[0]
-                nonzero = (tokens != 0).sum().item()
-                counts.append(nonzero)
-        return counts
-
-    def tokenize_raw(self, prompts: list[str]) -> list[torch.Tensor]:
-        return [self.tokenizer([p])[0] for p in prompts]
+        return self.validate_prompts(prompts)

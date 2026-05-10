@@ -1,0 +1,164 @@
+from __future__ import annotations
+
+import asyncio
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import AsyncGenerator
+
+import torch
+
+from app.models.base_model import BaseModel
+from app.models.siglip2_model import SigLip2Model
+
+
+class NoModelLoadedError(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class ModelConfig:
+    model_id: str
+    display_name: str
+    model_type: str
+    hf_repo: str
+    params: str
+    resolution: int | str
+
+
+@dataclass
+class ModelLease:
+    model: BaseModel
+
+
+SIGLIP2_REGISTRY: dict[str, ModelConfig] = {
+    "siglip2-base-patch16-256": ModelConfig(
+        model_id="siglip2-base-patch16-256",
+        display_name="SigLIP2 Base (256px)",
+        model_type="siglip2",
+        hf_repo="google/siglip2-base-patch16-256",
+        params="0.4B",
+        resolution=256,
+    ),
+    "siglip2-base-patch16-384": ModelConfig(
+        model_id="siglip2-base-patch16-384",
+        display_name="SigLIP2 Base (384px)",
+        model_type="siglip2",
+        hf_repo="google/siglip2-base-patch16-384",
+        params="0.4B",
+        resolution=384,
+    ),
+    "siglip2-large-patch16-256": ModelConfig(
+        model_id="siglip2-large-patch16-256",
+        display_name="SigLIP2 Large (256px)",
+        model_type="siglip2",
+        hf_repo="google/siglip2-large-patch16-256",
+        params="0.9B",
+        resolution=256,
+    ),
+    "siglip2-large-patch16-384": ModelConfig(
+        model_id="siglip2-large-patch16-384",
+        display_name="SigLIP2 Large (384px)",
+        model_type="siglip2",
+        hf_repo="google/siglip2-large-patch16-384",
+        params="0.9B",
+        resolution=384,
+    ),
+    "siglip2-so400m-patch14-384": ModelConfig(
+        model_id="siglip2-so400m-patch14-384",
+        display_name="SigLIP2 SO400M (384px)",
+        model_type="siglip2",
+        hf_repo="google/siglip2-so400m-patch14-384",
+        params="1B",
+        resolution=384,
+    ),
+    "siglip2-so400m-patch16-512": ModelConfig(
+        model_id="siglip2-so400m-patch16-512",
+        display_name="SigLIP2 SO400M (512px)",
+        model_type="siglip2",
+        hf_repo="google/siglip2-so400m-patch16-512",
+        params="1B",
+        resolution=512,
+    ),
+}
+
+
+class ModelManager:
+    def __init__(self, cache_dir: str):
+        self.registry = dict(SIGLIP2_REGISTRY)
+        self.active_model: BaseModel | None = None
+        self.active_model_id: str | None = None
+        self.cache_dir = cache_dir
+        self._condition = asyncio.Condition()
+        self._swapping = False
+        self._active_leases = 0
+
+    @asynccontextmanager
+    async def acquire(self, timeout: float) -> AsyncGenerator[ModelLease, None]:
+        async with asyncio.timeout(timeout):
+            async with self._condition:
+                await self._condition.wait_for(lambda: not self._swapping)
+                if self.active_model is None:
+                    raise NoModelLoadedError()
+                self._active_leases += 1
+                model_ref = self.active_model
+
+        try:
+            yield ModelLease(model=model_ref)
+        finally:
+            async with self._condition:
+                self._active_leases -= 1
+                if self._active_leases == 0:
+                    self._condition.notify_all()
+
+    async def load_model(self, model_id: str) -> None:
+        config = self.registry[model_id]
+
+        async with self._condition:
+            await self._condition.wait_for(lambda: not self._swapping)
+            if self.active_model_id == model_id:
+                return
+            self._swapping = True
+            self._condition.notify_all()
+            await self._condition.wait_for(lambda: self._active_leases == 0)
+            old_model = self.active_model
+            self.active_model = None
+            self.active_model_id = None
+
+        try:
+            del old_model
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            new_model = SigLip2Model(
+                hf_repo=config.hf_repo, cache_dir=self.cache_dir
+            )
+        except Exception:
+            async with self._condition:
+                self._swapping = False
+                self._condition.notify_all()
+            raise
+
+        async with self._condition:
+            self.active_model = new_model
+            self.active_model_id = model_id
+            self._swapping = False
+            self._condition.notify_all()
+
+    def list_models(self) -> list[dict]:
+        result = []
+        for config in self.registry.values():
+            cached = self._is_cached(config.hf_repo)
+            result.append({
+                "model_id": config.model_id,
+                "display_name": config.display_name,
+                "model_type": config.model_type,
+                "params": config.params,
+                "resolution": config.resolution,
+                "loaded": self.active_model_id == config.model_id,
+                "cached": cached,
+            })
+        return result
+
+    def _is_cached(self, hf_repo: str) -> bool:
+        cache_path = Path(self.cache_dir) / f"models--{hf_repo.replace('/', '--')}"
+        return cache_path.exists()
