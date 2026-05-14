@@ -1052,6 +1052,7 @@ cp .env.example .env
 | `MAX_UPLOAD_CONCURRENCY` | `MAX_CONCURRENT_REQUESTS + 2` | Max simultaneous uploads being parsed. Bounds temp disk usage. |
 | `API_KEY` | (unset) | If set, all requests to `/api/v1/classify` and `/ready` must include an `X-API-Key` header with this value |
 | `ALLOW_UNAUTHENTICATED` | `false` | Must be `true` if `API_KEY` is not set. Server refuses to start without explicit auth configuration. |
+| `SKIP_MODEL_AUTOLOAD` | `false` | Skip automatic model loading at startup. The server starts and `/live` works, but `/ready` returns 503 until a model is loaded via `/api/v1/models/load`. Useful for CI smoke tests or deferred-load deployments. |
 | `FFMPEG_TIMEOUT_SECONDS` | `120` | Timeout for ffmpeg/ffprobe subprocess calls |
 | `REQUEST_TIMEOUT_SECONDS` | `300` | End-to-end timeout for the entire inference pipeline per request |
 | `CLIP_CACHE_DIR` | `/app/models` | Directory where model weights are downloaded and cached. |

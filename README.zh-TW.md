@@ -606,6 +606,7 @@ cp .env.example .env
 | `MAX_UPLOAD_CONCURRENCY` | `MAX_CONCURRENT_REQUESTS + 2` | 最大同時上傳解析數。限制暫存磁碟使用量。 |
 | `API_KEY` | （未設定） | 若有設定，所有對 `/api/v1/classify` 和 `/ready` 的請求都必須在標頭中包含 `X-API-Key` |
 | `ALLOW_UNAUTHENTICATED` | `false` | 若未設定 `API_KEY`，此值必須為 `true`。伺服器在沒有明確驗證設定時會拒絕啟動。 |
+| `SKIP_MODEL_AUTOLOAD` | `false` | 啟動時跳過自動載入模型。伺服器啟動後 `/live` 正常運作，但 `/ready` 會回傳 503 直到透過 `/api/v1/models/load` 手動載入模型。適用於 CI 煙霧測試或延遲載入部署。 |
 | `FFMPEG_TIMEOUT_SECONDS` | `120` | ffmpeg/ffprobe 子程序的逾時時間 |
 | `REQUEST_TIMEOUT_SECONDS` | `300` | 整個推論管線的端對端逾時時間 |
 | `CLIP_CACHE_DIR` | `/app/models` | 模型權重下載與快取目錄。 |

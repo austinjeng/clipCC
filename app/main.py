@@ -96,7 +96,8 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
             except Exception as e:
                 logger.error(f"Failed to auto-load model: {e}")
 
-        asyncio.create_task(_auto_load())
+        if not settings.skip_model_autoload:
+            asyncio.create_task(_auto_load())
 
         yield
 

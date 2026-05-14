@@ -60,3 +60,14 @@ def test_default_model_id_from_env(monkeypatch):
     monkeypatch.setenv("DEFAULT_MODEL_ID", "siglip2-large-patch16-384")
     s = Settings(allow_unauthenticated=True)
     assert s.default_model_id == "siglip2-large-patch16-384"
+
+
+def test_skip_model_autoload_default():
+    s = Settings(allow_unauthenticated=True)
+    assert s.skip_model_autoload is False
+
+
+def test_skip_model_autoload_from_env(monkeypatch):
+    monkeypatch.setenv("SKIP_MODEL_AUTOLOAD", "true")
+    s = Settings(allow_unauthenticated=True)
+    assert s.skip_model_autoload is True
