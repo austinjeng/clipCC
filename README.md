@@ -16,10 +16,34 @@ A cross-platform, Dockerized API that classifies video content against user-prov
 - **Three aggregation modes** — `mean` (average across frames), `max` (peak per label with timestamp), `temporal` (frame-by-frame timeline with segment detection).
 - **Sigmoid scoring** — each label gets an independent confidence score between 0 and 1. Multiple labels can score high simultaneously.
 - **Lightweight Docker image** — ~1 GB base image. Models download on demand and are cached in a Docker volume.
+- **Pre-built images** — `docker pull ghcr.io/austinjeng/clipcc:latest` for instant setup on amd64 and arm64.
 - **GPU support** — NVIDIA CUDA acceleration (10-30x faster than CPU).
 - **Fail-closed authentication** — API key or explicit opt-out required.
 
-### Getting the source code
+### Quick Start (Docker)
+
+Pull and run the pre-built image — no cloning or building required:
+
+```bash
+docker pull ghcr.io/austinjeng/clipcc:latest
+docker run -p 8000:8000 -e ALLOW_UNAUTHENTICATED=true \
+  -v clipcc-models:/app/models ghcr.io/austinjeng/clipcc:latest
+```
+
+Open `http://localhost:8000` in your browser. The default model (~800 MB) downloads automatically on first start.
+
+**Production deployment** (use `--env-file` to keep secrets out of shell history):
+
+```bash
+# Create .env file
+echo "API_KEY=your-secret-key" > .env
+
+# Run
+docker run -p 8000:8000 --env-file .env \
+  -v clipcc-models:/app/models ghcr.io/austinjeng/clipcc:latest
+```
+
+### Building from Source
 
 ```bash
 git clone https://github.com/austinjeng/clipCC.git
@@ -31,6 +55,8 @@ cd clipCC
 ## Table of Contents
 
 - [Features](#features)
+  - [Quick Start (Docker)](#quick-start-docker)
+  - [Building from Source](#building-from-source)
 - [Available Models](#available-models)
 - [Setup by Platform](#setup-by-platform)
   - [Windows](#windows)

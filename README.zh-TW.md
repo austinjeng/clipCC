@@ -25,6 +25,8 @@
 - [功能特色](#功能特色)
 - [可用模型](#可用模型)
 - [快速開始](#快速開始)
+  - [Docker 映像（推薦）](#docker-映像推薦)
+  - [從原始碼建置](#從原始碼建置)
 - [網頁 UI](#網頁-ui)
 - [API 參考文件](#api-參考文件)
   - [POST /api/v1/classify](#post-apiv1classify)
@@ -67,7 +69,32 @@ ClipCC 內建 6 個 SigLIP2 模型。預設模型會在啟動時自動載入，�
 
 ## 快速開始
 
-### 1. 複製儲存庫
+### Docker 映像（推薦）
+
+拉取預建映像，無需複製或建置：
+
+```bash
+docker pull ghcr.io/austinjeng/clipcc:latest
+docker run -p 8000:8000 -e ALLOW_UNAUTHENTICATED=true \
+  -v clipcc-models:/app/models ghcr.io/austinjeng/clipcc:latest
+```
+
+開啟 `http://localhost:8000`。預設模型（約 800 MB）會在首次啟動時自動下載。
+
+**正式部署**（使用 `--env-file` 避免密鑰留在 shell 歷史紀錄中）：
+
+```bash
+# 建立 .env 檔案
+echo "API_KEY=your-secret-key" > .env
+
+# 執行
+docker run -p 8000:8000 --env-file .env \
+  -v clipcc-models:/app/models ghcr.io/austinjeng/clipcc:latest
+```
+
+### 從原始碼建置
+
+#### 1. 複製儲存庫
 
 ```bash
 git clone https://github.com/austinjeng/clipCC.git
