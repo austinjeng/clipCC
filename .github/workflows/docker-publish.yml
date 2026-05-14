@@ -1,0 +1,114 @@
+name: Docker Publish
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-test-publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build amd64 image for smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          platforms: linux/amd64
+          build-args: TORCH_VARIANT=cpu
+          tags: clipcc:smoke-amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Boot smoke test (amd64)
+        run: |
+          docker run -d --name smoke-amd64             -p 8000:8000             -e ALLOW_UNAUTHENTICATED=true             -e SKIP_MODEL_AUTOLOAD=true             clipcc:smoke-amd64
+
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8000/live > /dev/null 2>&1; then
+              echo "amd64 smoke test passed"
+              break
+            fi
+            sleep 2
+          done
+
+          if ! curl -sf http://localhost:8000/live > /dev/null 2>&1; then
+            echo "amd64 smoke test failed"
+            docker logs smoke-amd64
+            exit 1
+          fi
+
+          docker rm -f smoke-amd64
+
+      - name: Build arm64 image for smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          platforms: linux/arm64
+          build-args: TORCH_VARIANT=cpu
+          tags: clipcc:smoke-arm64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Boot smoke test (arm64)
+        run: |
+          docker run -d --name smoke-arm64             --platform linux/arm64             -p 8001:8000             -e ALLOW_UNAUTHENTICATED=true             -e SKIP_MODEL_AUTOLOAD=true             clipcc:smoke-arm64
+
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8001/live > /dev/null 2>&1; then
+              echo "arm64 smoke test passed"
+              break
+            fi
+            sleep 2
+          done
+
+          if ! curl -sf http://localhost:8001/live > /dev/null 2>&1; then
+            echo "arm64 smoke test failed"
+            docker logs smoke-arm64
+            exit 1
+          fi
+
+          docker rm -f smoke-arm64
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=raw,value=latest
+            type=sha,format=long
+
+      - name: Build and push multi-arch image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: TORCH_VARIANT=cpu
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
