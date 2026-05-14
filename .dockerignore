@@ -1,0 +1,12 @@
+.git
+__pycache__
+.pytest_cache
+.playwright-mcp
+.planning/
+tests/
+docs/
+*.pyc
+.env
+.env.*
+videos/
+tmp/
