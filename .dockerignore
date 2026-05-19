@@ -10,3 +10,5 @@ docs/
 .env.*
 videos/
 tmp/
+models/
+scripts/

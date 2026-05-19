@@ -1,0 +1,8 @@
+models/
+__pycache__/
+*.pyc
+.env
+.env.*
+tmp/
+videos/
+.pytest_cache/
