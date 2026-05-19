@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -178,7 +179,7 @@ class ModelManager:
     def list_models(self) -> list[dict]:
         result = []
         for config in self.registry.values():
-            cached = self._is_cached(config.hf_repo)
+            cached = self._is_cached(config)
             result.append({
                 "model_id": config.model_id,
                 "display_name": config.display_name,
@@ -190,6 +191,19 @@ class ModelManager:
             })
         return result
 
-    def _is_cached(self, hf_repo: str) -> bool:
-        cache_path = Path(self.cache_dir) / f"models--{hf_repo.replace('/', '--')}"
-        return cache_path.exists()
+    def _is_cached(self, config: ModelConfig) -> bool:
+        cache_path = Path(self.cache_dir) / f"models--{config.hf_repo.replace('/', '--')}"
+        marker_path = cache_path / ".validated"
+        if not marker_path.exists():
+            return False
+        try:
+            marker = json.loads(marker_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return False
+        if marker.get("model_id") != config.model_id:
+            return False
+        if marker.get("hf_repo") != config.hf_repo:
+            return False
+        if config.revision and marker.get("revision") != config.revision:
+            return False
+        return True

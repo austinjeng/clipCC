@@ -1,5 +1,7 @@
 import asyncio
+import json
 import pytest
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 from app.models.model_manager import (
     ModelManager,
@@ -199,3 +201,88 @@ class TestErrorTypes:
         err = InsufficientResourcesError("Need 10GB RAM, only 4GB available")
         assert isinstance(err, Exception)
         assert "10GB" in str(err)
+
+
+class TestCacheValidation:
+    def _write_marker(self, cache_dir, hf_repo, marker_data):
+        """Helper: write a .validated marker for a model."""
+        model_dir = Path(cache_dir) / f"models--{hf_repo.replace('/', '--')}"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        marker_path = model_dir / ".validated"
+        marker_path.write_text(json.dumps(marker_data))
+
+    def test_not_cached_when_no_directory(self, manager):
+        config = SIGLIP2_REGISTRY["siglip2-base-patch16-256"]
+        assert manager._is_cached(config) is False
+
+    def test_not_cached_when_no_marker(self, manager):
+        config = SIGLIP2_REGISTRY["siglip2-base-patch16-256"]
+        model_dir = Path(manager.cache_dir) / "models--google--siglip2-base-patch16-256"
+        model_dir.mkdir(parents=True)
+        assert manager._is_cached(config) is False
+
+    def test_cached_when_valid_marker(self, manager):
+        config = SIGLIP2_REGISTRY["siglip2-base-patch16-256"]
+        self._write_marker(manager.cache_dir, config.hf_repo, {
+            "schema_version": 1,
+            "model_id": "siglip2-base-patch16-256",
+            "hf_repo": "google/siglip2-base-patch16-256",
+            "revision": "abc123",
+            "validated_at": "2026-05-19T10:00:00Z",
+        })
+        assert manager._is_cached(config) is True
+
+    def test_not_cached_when_model_id_mismatch(self, manager):
+        config = SIGLIP2_REGISTRY["siglip2-base-patch16-256"]
+        self._write_marker(manager.cache_dir, config.hf_repo, {
+            "schema_version": 1,
+            "model_id": "wrong-model-id",
+            "hf_repo": "google/siglip2-base-patch16-256",
+            "revision": "abc123",
+            "validated_at": "2026-05-19T10:00:00Z",
+        })
+        assert manager._is_cached(config) is False
+
+    def test_not_cached_when_hf_repo_mismatch(self, manager):
+        config = SIGLIP2_REGISTRY["siglip2-base-patch16-256"]
+        self._write_marker(manager.cache_dir, config.hf_repo, {
+            "schema_version": 1,
+            "model_id": "siglip2-base-patch16-256",
+            "hf_repo": "wrong/repo",
+            "revision": "abc123",
+            "validated_at": "2026-05-19T10:00:00Z",
+        })
+        assert manager._is_cached(config) is False
+
+    def test_not_cached_when_revision_mismatch(self, manager):
+        from dataclasses import replace
+        config = SIGLIP2_REGISTRY["siglip2-base-patch16-256"]
+        pinned = replace(config, revision="expected-sha")
+        self._write_marker(manager.cache_dir, config.hf_repo, {
+            "schema_version": 1,
+            "model_id": "siglip2-base-patch16-256",
+            "hf_repo": "google/siglip2-base-patch16-256",
+            "revision": "different-sha",
+            "validated_at": "2026-05-19T10:00:00Z",
+        })
+        assert manager._is_cached(pinned) is False
+
+    def test_cached_when_no_pinned_revision(self, manager):
+        """Config has revision=None, marker has a revision -- still valid."""
+        config = SIGLIP2_REGISTRY["siglip2-base-patch16-256"]
+        assert config.revision is None
+        self._write_marker(manager.cache_dir, config.hf_repo, {
+            "schema_version": 1,
+            "model_id": "siglip2-base-patch16-256",
+            "hf_repo": "google/siglip2-base-patch16-256",
+            "revision": "abc123",
+            "validated_at": "2026-05-19T10:00:00Z",
+        })
+        assert manager._is_cached(config) is True
+
+    def test_not_cached_when_marker_is_corrupt_json(self, manager):
+        config = SIGLIP2_REGISTRY["siglip2-base-patch16-256"]
+        model_dir = Path(manager.cache_dir) / "models--google--siglip2-base-patch16-256"
+        model_dir.mkdir(parents=True)
+        (model_dir / ".validated").write_text("not json{{{")
+        assert manager._is_cached(config) is False
