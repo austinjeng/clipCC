@@ -286,3 +286,72 @@ class TestCacheValidation:
         model_dir.mkdir(parents=True)
         (model_dir / ".validated").write_text("not json{{{")
         assert manager._is_cached(config) is False
+
+
+class TestResourceGating:
+    @pytest.mark.asyncio
+    async def test_load_rejects_when_total_ram_insufficient(self, manager):
+        """Tier 1: model needs more RAM than the system has."""
+        config = SIGLIP2_REGISTRY["siglip2-giant-opt-patch16-384"]
+        assert config.min_ram_gb == 10
+
+        with patch("app.models.model_manager.psutil") as mock_psutil:
+            mock_psutil.virtual_memory.return_value = MagicMock(
+                total=4 * 1e9, available=4 * 1e9
+            )
+            with pytest.raises(InsufficientResourcesError):
+                await manager.load_model("siglip2-giant-opt-patch16-384")
+
+    @pytest.mark.asyncio
+    async def test_load_estimates_post_unload_capacity(self, manager):
+        """Tier 2: available RAM is low but unloading active model would free enough."""
+        with patch("app.models.model_manager.SigLip2Model") as MockModel:
+            mock_instance = MagicMock()
+            MockModel.return_value = mock_instance
+            await manager.load_model("siglip2-base-patch16-256")
+
+        with patch("app.models.model_manager.psutil") as mock_psutil:
+            mock_psutil.virtual_memory.return_value = MagicMock(
+                total=16 * 1e9,
+                available=2 * 1e9,
+            )
+            with patch("app.models.model_manager.SigLip2Model") as MockModel2:
+                mock_new = MagicMock()
+                MockModel2.return_value = mock_new
+                await manager.load_model("siglip2-base-patch16-384")
+                assert manager.active_model_id == "siglip2-base-patch16-384"
+
+    @pytest.mark.asyncio
+    async def test_load_no_gate_when_min_ram_is_none(self, manager):
+        """Models without min_ram_gb skip the resource check."""
+        config = SIGLIP2_REGISTRY["siglip2-base-patch16-256"]
+        assert config.min_ram_gb is None
+
+        with patch("app.models.model_manager.SigLip2Model") as MockModel:
+            mock_instance = MagicMock()
+            MockModel.return_value = mock_instance
+            await manager.load_model("siglip2-base-patch16-256")
+        assert manager.active_model_id == "siglip2-base-patch16-256"
+
+
+class TestSafeModelSwap:
+    @pytest.mark.asyncio
+    async def test_preflight_failure_preserves_active_model(self, manager):
+        """If preflight fails, the currently loaded model stays active."""
+        with patch("app.models.model_manager.SigLip2Model") as MockModel:
+            mock_instance = MagicMock()
+            MockModel.return_value = mock_instance
+            await manager.load_model("siglip2-base-patch16-256")
+
+        assert manager.active_model_id == "siglip2-base-patch16-256"
+        assert manager.active_model is mock_instance
+
+        with patch("app.models.model_manager.psutil") as mock_psutil:
+            mock_psutil.virtual_memory.return_value = MagicMock(
+                total=4 * 1e9, available=4 * 1e9
+            )
+            with pytest.raises(InsufficientResourcesError):
+                await manager.load_model("siglip2-giant-opt-patch16-384")
+
+        assert manager.active_model_id == "siglip2-base-patch16-256"
+        assert manager.active_model is mock_instance

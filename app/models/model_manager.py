@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncGenerator
 
+import psutil
 import torch
 
 from app.models.base_model import BaseModel
@@ -116,11 +117,12 @@ SIGLIP2_REGISTRY: dict[str, ModelConfig] = {
 
 
 class ModelManager:
-    def __init__(self, cache_dir: str):
+    def __init__(self, cache_dir: str, offline: bool = False):
         self.registry = dict(SIGLIP2_REGISTRY)
         self.active_model: BaseModel | None = None
         self.active_model_id: str | None = None
         self.cache_dir = cache_dir
+        self._offline = offline
         self._condition = asyncio.Condition()
         self._swapping = False
         self._active_leases = 0
@@ -145,6 +147,7 @@ class ModelManager:
 
     async def load_model(self, model_id: str) -> None:
         config = self.registry[model_id]
+        self._preflight_check(config)
 
         async with self._condition:
             await self._condition.wait_for(lambda: not self._swapping)
@@ -175,6 +178,45 @@ class ModelManager:
             self.active_model_id = model_id
             self._swapping = False
             self._condition.notify_all()
+
+    def _preflight_check(self, config: ModelConfig) -> None:
+        self._check_resources(config)
+
+    def _check_resources(self, config: ModelConfig) -> None:
+        if config.min_ram_gb is None:
+            return
+
+        mem = psutil.virtual_memory()
+        required_bytes = config.min_ram_gb * 1.2 * 1e9
+
+        if required_bytes > mem.total:
+            raise InsufficientResourcesError(
+                f"Model {config.model_id} requires ~{config.min_ram_gb}GB RAM "
+                f"(with 1.2x headroom), but system total is "
+                f"{mem.total / 1e9:.1f}GB"
+            )
+
+        estimated_available = mem.available
+        if self.active_model_id:
+            active_config = self.registry.get(self.active_model_id)
+            if active_config and active_config.min_ram_gb:
+                estimated_available += active_config.min_ram_gb * 1e9
+
+        if required_bytes > estimated_available:
+            raise InsufficientResourcesError(
+                f"Model {config.model_id} requires ~{config.min_ram_gb}GB RAM "
+                f"(with 1.2x headroom), but estimated post-unload available is "
+                f"{estimated_available / 1e9:.1f}GB"
+            )
+
+        if config.min_vram_gb and torch.cuda.is_available():
+            free_vram, total_vram = torch.cuda.mem_get_info()
+            vram_required = config.min_vram_gb * 1.2 * 1e9
+            if vram_required > total_vram:
+                raise InsufficientResourcesError(
+                    f"Model {config.model_id} requires ~{config.min_vram_gb}GB VRAM, "
+                    f"but GPU total is {total_vram / 1e9:.1f}GB"
+                )
 
     def list_models(self) -> list[dict]:
         result = []
