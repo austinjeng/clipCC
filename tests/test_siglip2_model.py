@@ -1,6 +1,7 @@
 import pytest
 import torch
 from PIL import Image
+from unittest.mock import patch, MagicMock
 from app.models.base_model import BaseModel, ScoreBatch
 from app.models.siglip2_model import SigLip2Model
 
@@ -66,3 +67,55 @@ class TestSigLip2ModelInterface:
         result = model.tokenize_for_inference(["a cat", "a dog"])
         assert "input_ids" in result
         assert result["input_ids"].shape[1] == 64
+
+
+class TestSigLip2ModelOffline:
+    def test_constructor_accepts_revision_and_offline(self):
+        """Verify the constructor passes revision and local_files_only through."""
+        with patch("app.models.siglip2_model.AutoProcessor") as MockProc, \
+             patch("app.models.siglip2_model.AutoModel") as MockModel:
+            mock_model = MagicMock()
+            mock_model.to.return_value = mock_model
+            MockModel.from_pretrained.return_value = mock_model
+            MockProc.from_pretrained.return_value = MagicMock()
+
+            SigLip2Model(
+                hf_repo="google/siglip2-base-patch16-256",
+                cache_dir="/tmp/test",
+                revision="abc123",
+                offline=True,
+            )
+
+            MockProc.from_pretrained.assert_called_once_with(
+                "google/siglip2-base-patch16-256",
+                cache_dir="/tmp/test",
+                revision="abc123",
+                local_files_only=True,
+            )
+            call_kwargs = MockModel.from_pretrained.call_args[1]
+            assert call_kwargs["revision"] == "abc123"
+            assert call_kwargs["local_files_only"] is True
+
+    def test_constructor_defaults_online_no_revision(self):
+        """Default behavior: no revision, no local_files_only."""
+        with patch("app.models.siglip2_model.AutoProcessor") as MockProc, \
+             patch("app.models.siglip2_model.AutoModel") as MockModel:
+            mock_model = MagicMock()
+            mock_model.to.return_value = mock_model
+            MockModel.from_pretrained.return_value = mock_model
+            MockProc.from_pretrained.return_value = MagicMock()
+
+            SigLip2Model(
+                hf_repo="google/siglip2-base-patch16-256",
+                cache_dir="/tmp/test",
+            )
+
+            MockProc.from_pretrained.assert_called_once_with(
+                "google/siglip2-base-patch16-256",
+                cache_dir="/tmp/test",
+                revision=None,
+                local_files_only=False,
+            )
+            call_kwargs = MockModel.from_pretrained.call_args[1]
+            assert call_kwargs["revision"] is None
+            assert call_kwargs["local_files_only"] is False

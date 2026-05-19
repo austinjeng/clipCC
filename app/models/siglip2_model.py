@@ -12,13 +12,26 @@ class SigLip2Model(BaseModel):
     model_type = "siglip2"
     max_token_length = 64
 
-    def __init__(self, hf_repo: str, cache_dir: str):
+    def __init__(
+        self,
+        hf_repo: str,
+        cache_dir: str,
+        revision: str | None = None,
+        offline: bool = False,
+    ):
         self.hf_repo = hf_repo
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.processor = AutoProcessor.from_pretrained(hf_repo, cache_dir=cache_dir)
+        self.processor = AutoProcessor.from_pretrained(
+            hf_repo,
+            cache_dir=cache_dir,
+            revision=revision,
+            local_files_only=offline,
+        )
         self.model = AutoModel.from_pretrained(
             hf_repo,
             cache_dir=cache_dir,
+            revision=revision,
+            local_files_only=offline,
             torch_dtype=torch.float16 if self.device == "cuda" else torch.float32,
         ).to(self.device)
         self.model.eval()

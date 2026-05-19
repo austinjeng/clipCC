@@ -165,7 +165,10 @@ class ModelManager:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             new_model = SigLip2Model(
-                hf_repo=config.hf_repo, cache_dir=self.cache_dir
+                hf_repo=config.hf_repo,
+                cache_dir=self.cache_dir,
+                revision=config.revision,
+                offline=self._offline,
             )
         except Exception:
             async with self._condition:
