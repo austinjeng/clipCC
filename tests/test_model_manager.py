@@ -3,6 +3,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from app.models.model_manager import (
     ModelManager,
+    ModelConfig,
     NoModelLoadedError,
     ModelNotCachedError,
     InsufficientResourcesError,
@@ -13,6 +14,61 @@ from app.models.model_manager import (
 @pytest.fixture
 def manager(temp_dir):
     return ModelManager(cache_dir=str(temp_dir / "models"))
+
+
+class TestModelConfig:
+    def test_revision_field_defaults_none(self):
+        config = ModelConfig(
+            model_id="test",
+            display_name="Test",
+            model_type="siglip2",
+            hf_repo="google/test",
+            params="0.1B",
+            resolution=256,
+        )
+        assert config.revision is None
+        assert config.min_ram_gb is None
+        assert config.min_vram_gb is None
+
+    def test_revision_field_accepts_value(self):
+        config = ModelConfig(
+            model_id="test",
+            display_name="Test",
+            model_type="siglip2",
+            hf_repo="google/test",
+            params="0.1B",
+            resolution=256,
+            revision="abc123",
+            min_ram_gb=4,
+            min_vram_gb=2,
+        )
+        assert config.revision == "abc123"
+        assert config.min_ram_gb == 4
+        assert config.min_vram_gb == 2
+
+
+class TestRegistryExpansion:
+    def test_registry_has_8_models(self):
+        assert len(SIGLIP2_REGISTRY) == 8
+
+    def test_large_512_in_registry(self):
+        config = SIGLIP2_REGISTRY["siglip2-large-patch16-512"]
+        assert config.hf_repo == "google/siglip2-large-patch16-512"
+        assert config.params == "0.9B"
+        assert config.resolution == 512
+        assert config.min_ram_gb == 4
+
+    def test_giant_opt_in_registry(self):
+        config = SIGLIP2_REGISTRY["siglip2-giant-opt-patch16-384"]
+        assert config.hf_repo == "google/siglip2-giant-opt-patch16-384"
+        assert config.params == "~2B"
+        assert config.resolution == 384
+        assert config.min_ram_gb == 10
+
+    def test_existing_models_unchanged(self):
+        config = SIGLIP2_REGISTRY["siglip2-base-patch16-256"]
+        assert config.hf_repo == "google/siglip2-base-patch16-256"
+        assert config.params == "0.4B"
 
 
 class TestRegistry:

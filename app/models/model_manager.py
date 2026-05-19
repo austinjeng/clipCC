@@ -34,6 +34,9 @@ class ModelConfig:
     hf_repo: str
     params: str
     resolution: int | str
+    revision: str | None = None
+    min_ram_gb: int | None = None
+    min_vram_gb: int | None = None
 
 
 @dataclass
@@ -89,6 +92,24 @@ SIGLIP2_REGISTRY: dict[str, ModelConfig] = {
         hf_repo="google/siglip2-so400m-patch16-512",
         params="1B",
         resolution=512,
+    ),
+    "siglip2-large-patch16-512": ModelConfig(
+        model_id="siglip2-large-patch16-512",
+        display_name="SigLIP2 Large (512px)",
+        model_type="siglip2",
+        hf_repo="google/siglip2-large-patch16-512",
+        params="0.9B",
+        resolution=512,
+        min_ram_gb=4,
+    ),
+    "siglip2-giant-opt-patch16-384": ModelConfig(
+        model_id="siglip2-giant-opt-patch16-384",
+        display_name="SigLIP2 Giant-Opt (384px)",
+        model_type="siglip2",
+        hf_repo="google/siglip2-giant-opt-patch16-384",
+        params="~2B",
+        resolution=384,
+        min_ram_gb=10,
     ),
 }
 
