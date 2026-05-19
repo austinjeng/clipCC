@@ -20,6 +20,7 @@ def test_default_settings() -> None:
     assert s.request_timeout_seconds == 300
     assert s.clip_cache_dir == "/app/models"
     assert s.temp_dir == "/tmp/clipcc"
+    assert s.clipcc_offline is False
 
 
 def test_custom_upload_concurrency() -> None:
@@ -71,3 +72,14 @@ def test_skip_model_autoload_from_env(monkeypatch):
     monkeypatch.setenv("SKIP_MODEL_AUTOLOAD", "true")
     s = Settings(allow_unauthenticated=True)
     assert s.skip_model_autoload is True
+
+
+class TestOfflineSetting:
+    def test_offline_defaults_false(self):
+        s = Settings(allow_unauthenticated=True)
+        assert s.clipcc_offline is False
+
+    def test_offline_from_env(self, monkeypatch):
+        monkeypatch.setenv("CLIPCC_OFFLINE", "1")
+        s = Settings(allow_unauthenticated=True)
+        assert s.clipcc_offline is True
