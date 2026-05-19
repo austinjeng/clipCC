@@ -451,3 +451,56 @@ class TestManifestLoading:
         mgr = ModelManager(cache_dir=cache_dir)
         config = mgr.registry["siglip2-base-patch16-256"]
         assert config.revision is None
+
+
+class TestOfflineIntegration:
+    @pytest.mark.asyncio
+    async def test_full_offline_flow(self, temp_dir):
+        """Simulates: download script cached a model, app runs offline, loads it."""
+        cache_dir = str(temp_dir / "models")
+
+        # Simulate what download script does: write marker + manifest
+        config = SIGLIP2_REGISTRY["siglip2-base-patch16-256"]
+        model_dir = Path(cache_dir) / f"models--{config.hf_repo.replace('/', '--')}"
+        model_dir.mkdir(parents=True)
+        marker = {
+            "schema_version": 1,
+            "model_id": config.model_id,
+            "hf_repo": config.hf_repo,
+            "revision": "test-sha-abc",
+            "validated_at": "2026-05-19T10:00:00Z",
+        }
+        (model_dir / ".validated").write_text(json.dumps(marker))
+        manifest = {
+            config.model_id: {
+                "revision": "test-sha-abc",
+                "hf_repo": config.hf_repo,
+                "validated_at": "2026-05-19T10:00:00Z",
+            }
+        }
+        (Path(cache_dir) / "manifest.json").write_text(json.dumps(manifest))
+
+        # Create offline manager
+        mgr = ModelManager(cache_dir=cache_dir, offline=True)
+
+        # Verify manifest loaded revision
+        assert mgr.registry[config.model_id].revision == "test-sha-abc"
+
+        # Verify list_models only shows cached model
+        models = mgr.list_models()
+        cached_ids = [m["model_id"] for m in models]
+        assert config.model_id in cached_ids
+        assert len(cached_ids) == 1
+
+        # Verify uncached model load is rejected
+        with pytest.raises(ModelNotCachedError):
+            await mgr.load_model("siglip2-base-patch16-384")
+
+        # Verify cached model passes preflight (mock actual model construction)
+        with patch("app.models.model_manager.SigLip2Model") as MockModel:
+            mock_instance = MagicMock()
+            MockModel.return_value = mock_instance
+            await mgr.load_model(config.model_id)
+
+        assert mgr.active_model_id == config.model_id
+        assert mgr.active_model is mock_instance
