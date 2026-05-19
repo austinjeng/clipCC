@@ -232,3 +232,61 @@ async def test_active_model_after_swap(client):
     r = await client.get("/api/v1/models/active")
     assert r.status_code == 200
     assert r.json()["model_id"] == "siglip2-base-patch16-384"
+
+
+# ── Load model typed error responses ─────────────────────────────
+
+
+@pytest.fixture
+def isolated_settings(temp_dir):
+    return Settings(
+        allow_unauthenticated=True,
+        clip_cache_dir=str(temp_dir / "models"),
+        temp_dir=str(temp_dir / "tmp"),
+        skip_model_autoload=True,
+    )
+
+
+class TestLoadModelErrorHandling:
+    @pytest.mark.asyncio
+    async def test_unknown_model_returns_400(self, isolated_settings):
+        outer_app = create_app(isolated_settings)
+        inner_app = outer_app._app
+        async with inner_app.router.lifespan_context(inner_app):
+            async with AsyncClient(transport=ASGITransport(app=outer_app), base_url="http://test") as client:
+                resp = await client.post("/api/v1/models/load", json={"model_id": "nonexistent"})
+                assert resp.status_code == 400
+                assert "error_type" in resp.json()
+
+    @pytest.mark.asyncio
+    async def test_uncached_offline_returns_409(self, isolated_settings):
+        isolated_settings.clipcc_offline = True
+        outer_app = create_app(isolated_settings)
+        inner_app = outer_app._app
+        async with inner_app.router.lifespan_context(inner_app):
+            async with AsyncClient(transport=ASGITransport(app=outer_app), base_url="http://test") as client:
+                resp = await client.post(
+                    "/api/v1/models/load",
+                    json={"model_id": "siglip2-base-patch16-256"},
+                )
+                assert resp.status_code == 409
+                body = resp.json()
+                assert body["error_type"] == "ModelNotCachedError"
+
+    @pytest.mark.asyncio
+    async def test_insufficient_resources_returns_422(self, isolated_settings):
+        outer_app = create_app(isolated_settings)
+        inner_app = outer_app._app
+        async with inner_app.router.lifespan_context(inner_app):
+            async with AsyncClient(transport=ASGITransport(app=outer_app), base_url="http://test") as client:
+                with patch("app.models.model_manager.psutil") as mock_psutil:
+                    mock_psutil.virtual_memory.return_value = MagicMock(
+                        total=4 * 1e9, available=4 * 1e9
+                    )
+                    resp = await client.post(
+                        "/api/v1/models/load",
+                        json={"model_id": "siglip2-giant-opt-patch16-384"},
+                    )
+                assert resp.status_code == 422
+                body = resp.json()
+                assert body["error_type"] == "InsufficientResourcesError"

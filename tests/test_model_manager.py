@@ -404,3 +404,50 @@ class TestOfflinePreflight:
 
         assert mgr.active_model is mock_model
         assert mgr.active_model_id == "siglip2-base-patch16-384"
+
+
+class TestManifestLoading:
+    def test_loads_revisions_from_manifest(self, temp_dir):
+        cache_dir = str(temp_dir / "models")
+        Path(cache_dir).mkdir(parents=True)
+        manifest = {
+            "siglip2-base-patch16-256": {
+                "revision": "sha-abc123",
+                "hf_repo": "google/siglip2-base-patch16-256",
+                "validated_at": "2026-05-19T10:00:00Z",
+            }
+        }
+        (Path(cache_dir) / "manifest.json").write_text(json.dumps(manifest))
+
+        mgr = ModelManager(cache_dir=cache_dir)
+        config = mgr.registry["siglip2-base-patch16-256"]
+        assert config.revision == "sha-abc123"
+
+    def test_no_manifest_leaves_revisions_none(self, temp_dir):
+        mgr = ModelManager(cache_dir=str(temp_dir / "models"))
+        config = mgr.registry["siglip2-base-patch16-256"]
+        assert config.revision is None
+
+    def test_manifest_only_updates_known_models(self, temp_dir):
+        cache_dir = str(temp_dir / "models")
+        Path(cache_dir).mkdir(parents=True)
+        manifest = {
+            "unknown-model": {
+                "revision": "sha-xyz",
+                "hf_repo": "google/unknown",
+                "validated_at": "2026-05-19T10:00:00Z",
+            }
+        }
+        (Path(cache_dir) / "manifest.json").write_text(json.dumps(manifest))
+
+        mgr = ModelManager(cache_dir=cache_dir)
+        assert len(mgr.registry) == 8
+
+    def test_corrupt_manifest_ignored(self, temp_dir):
+        cache_dir = str(temp_dir / "models")
+        Path(cache_dir).mkdir(parents=True)
+        (Path(cache_dir) / "manifest.json").write_text("not valid json{{{")
+
+        mgr = ModelManager(cache_dir=cache_dir)
+        config = mgr.registry["siglip2-base-patch16-256"]
+        assert config.revision is None

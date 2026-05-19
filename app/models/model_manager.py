@@ -126,6 +126,24 @@ class ModelManager:
         self._condition = asyncio.Condition()
         self._swapping = False
         self._active_leases = 0
+        self._load_manifest()
+
+    def _load_manifest(self) -> None:
+        manifest_path = Path(self.cache_dir) / "manifest.json"
+        if not manifest_path.exists():
+            return
+        try:
+            manifest = json.loads(manifest_path.read_text())
+        except (json.JSONDecodeError, OSError):
+            return
+        from dataclasses import replace
+        for model_id, entry in manifest.items():
+            if model_id in self.registry:
+                revision = entry.get("revision")
+                if revision:
+                    self.registry[model_id] = replace(
+                        self.registry[model_id], revision=revision
+                    )
 
     @asynccontextmanager
     async def acquire(self, timeout: float) -> AsyncGenerator[ModelLease, None]:

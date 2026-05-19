@@ -30,7 +30,12 @@ from app.errors.handlers import (
 )
 from app.inference_runner import InferenceRunner
 from app.middleware import RequestGateMiddleware
-from app.models.model_manager import ModelManager, NoModelLoadedError
+from app.models.model_manager import (
+    ModelManager,
+    NoModelLoadedError,
+    ModelNotCachedError,
+    InsufficientResourcesError,
+)
 from app.resource_gates import ResourceGates
 from app.schemas.response import (
     ClassifyMetadata,
@@ -77,7 +82,10 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        manager = ModelManager(cache_dir=settings.clip_cache_dir)
+        manager = ModelManager(
+            cache_dir=settings.clip_cache_dir,
+            offline=settings.clipcc_offline,
+        )
         temp_store = TempStore(settings.temp_dir)
         temp_store.run_janitor()
         gates = ResourceGates(
@@ -130,14 +138,36 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
         if request.model_id not in manager.registry:
             return JSONResponse(
                 status_code=400,
-                content={"detail": f"Unknown model_id: {request.model_id}"},
+                content={
+                    "detail": f"Unknown model_id: {request.model_id}",
+                    "error_type": "ValueError",
+                },
             )
         try:
             await manager.load_model(request.model_id)
+        except ModelNotCachedError as e:
+            return JSONResponse(
+                status_code=409,
+                content={
+                    "detail": str(e),
+                    "error_type": "ModelNotCachedError",
+                },
+            )
+        except InsufficientResourcesError as e:
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "detail": str(e),
+                    "error_type": "InsufficientResourcesError",
+                },
+            )
         except Exception as e:
             return JSONResponse(
                 status_code=500,
-                content={"detail": f"Failed to load model: {str(e)}"},
+                content={
+                    "detail": f"Failed to load model: {str(e)}",
+                    "error_type": type(e).__name__,
+                },
             )
         return {"status": "loaded", "model_id": request.model_id}
 
