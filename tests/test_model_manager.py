@@ -355,3 +355,52 @@ class TestSafeModelSwap:
 
         assert manager.active_model_id == "siglip2-base-patch16-256"
         assert manager.active_model is mock_instance
+
+
+class TestOfflineVisibility:
+    def test_online_list_models_returns_all(self, manager):
+        models = manager.list_models()
+        assert len(models) == 8
+
+    def test_offline_list_models_excludes_uncached(self, temp_dir):
+        mgr = ModelManager(cache_dir=str(temp_dir / "models"), offline=True)
+        models = mgr.list_models()
+        assert len(models) == 0
+
+    def test_offline_list_models_includes_cached(self, temp_dir):
+        cache_dir = str(temp_dir / "models")
+        mgr = ModelManager(cache_dir=cache_dir, offline=True)
+        config = SIGLIP2_REGISTRY["siglip2-base-patch16-256"]
+        model_dir = Path(cache_dir) / "models--google--siglip2-base-patch16-256"
+        model_dir.mkdir(parents=True)
+        (model_dir / ".validated").write_text(json.dumps({
+            "schema_version": 1,
+            "model_id": "siglip2-base-patch16-256",
+            "hf_repo": "google/siglip2-base-patch16-256",
+            "revision": "abc123",
+            "validated_at": "2026-05-19T10:00:00Z",
+        }))
+        models = mgr.list_models()
+        assert len(models) == 1
+        assert models[0]["model_id"] == "siglip2-base-patch16-256"
+
+
+class TestOfflinePreflight:
+    @pytest.mark.asyncio
+    async def test_offline_load_uncached_raises(self, temp_dir):
+        mgr = ModelManager(cache_dir=str(temp_dir / "models"), offline=True)
+        with pytest.raises(ModelNotCachedError):
+            await mgr.load_model("siglip2-base-patch16-256")
+
+    @pytest.mark.asyncio
+    async def test_offline_load_uncached_preserves_active(self, temp_dir):
+        mgr = ModelManager(cache_dir=str(temp_dir / "models"), offline=True)
+        mock_model = MagicMock()
+        mgr.active_model = mock_model
+        mgr.active_model_id = "siglip2-base-patch16-384"
+
+        with pytest.raises(ModelNotCachedError):
+            await mgr.load_model("siglip2-base-patch16-256")
+
+        assert mgr.active_model is mock_model
+        assert mgr.active_model_id == "siglip2-base-patch16-384"

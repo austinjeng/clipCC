@@ -180,6 +180,11 @@ class ModelManager:
             self._condition.notify_all()
 
     def _preflight_check(self, config: ModelConfig) -> None:
+        if self._offline and not self._is_cached(config):
+            raise ModelNotCachedError(
+                f"Model {config.model_id} is not cached and CLIPCC_OFFLINE is enabled. "
+                f"Run: python scripts/download_models.py --models {config.model_id}"
+            )
         self._check_resources(config)
 
     def _check_resources(self, config: ModelConfig) -> None:
@@ -222,6 +227,8 @@ class ModelManager:
         result = []
         for config in self.registry.values():
             cached = self._is_cached(config)
+            if self._offline and not cached:
+                continue
             result.append({
                 "model_id": config.model_id,
                 "display_name": config.display_name,
