@@ -16,6 +16,16 @@ class NoModelLoadedError(Exception):
     pass
 
 
+class ModelNotCachedError(Exception):
+    """Raised when loading an uncached model in offline mode."""
+    pass
+
+
+class InsufficientResourcesError(Exception):
+    """Raised when host RAM/VRAM is below model's minimum requirements."""
+    pass
+
+
 @dataclass(frozen=True)
 class ModelConfig:
     model_id: str

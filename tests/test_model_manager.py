@@ -1,7 +1,13 @@
 import asyncio
 import pytest
 from unittest.mock import patch, MagicMock
-from app.models.model_manager import ModelManager, NoModelLoadedError, SIGLIP2_REGISTRY
+from app.models.model_manager import (
+    ModelManager,
+    NoModelLoadedError,
+    ModelNotCachedError,
+    InsufficientResourcesError,
+    SIGLIP2_REGISTRY,
+)
 
 
 @pytest.fixture
@@ -125,3 +131,15 @@ class TestLoadModel:
     async def test_invalid_model_id_raises(self, manager):
         with pytest.raises(KeyError):
             await manager.load_model("nonexistent-model")
+
+
+class TestErrorTypes:
+    def test_model_not_cached_error_is_exception(self):
+        err = ModelNotCachedError("siglip2-base-patch16-256")
+        assert isinstance(err, Exception)
+        assert "siglip2-base-patch16-256" in str(err)
+
+    def test_insufficient_resources_error_is_exception(self):
+        err = InsufficientResourcesError("Need 10GB RAM, only 4GB available")
+        assert isinstance(err, Exception)
+        assert "10GB" in str(err)
