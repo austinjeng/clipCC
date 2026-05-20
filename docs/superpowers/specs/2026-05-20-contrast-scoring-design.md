@@ -1,7 +1,7 @@
 # Contrast Scoring Mode
 
 **Date:** 2026-05-20
-**Status:** Approved (rev 2 — addresses review findings)
+**Status:** Approved (rev 3 — sign-symmetric reductions, response clarity)
 
 ## Overview
 
@@ -69,11 +69,12 @@ frame_margin[t] = frame_pos_score[t] - frame_neg_score[t]
 video_margin = temporal_reduce(frame_margin, mode)
 ```
 
-Reduction modes:
+Reduction modes (all sign-symmetric — detect both positive and negative sparse events equally):
+
 - `"mean"` (default) — average margin across all frames. Best for whole-video classification (mood, topic, setting).
-- `"top_k_mean"` — mean of top-K% frames by absolute margin (K=10). Better for sparse-event detection (brief dangerous moment in long video).
-- `"max"` — single strongest frame margin. Most sensitive to outliers.
-- `"quantile"` — 90th percentile of frame margins. Robust to outliers while still catching sparse events.
+- `"top_k_mean"` — mean of top-K% frames ranked by `abs(frame_margin)` (K=10), preserving original signed values. Better for sparse-event detection (brief dangerous moment in long video).
+- `"max"` — frame with largest `abs(frame_margin)`, returning its signed value: `idx = argmax(abs(frame_margin)); video_margin = frame_margin[idx]`. Most sensitive to outliers.
+- `"quantile"` — computes both 90th percentile (positive tail) and 10th percentile (negative tail), returns whichever has larger absolute value: `pos = quantile(0.90); neg = quantile(0.10); video_margin = pos if abs(pos) >= abs(neg) else neg`. Robust to outliers while catching sparse events in either direction.
 
 #### Step 3: Verdict
 
@@ -90,12 +91,12 @@ With logit-space normalization for CLIP and mean for SigLIP2, both models produc
 - SigLIP2: 0.15
 - CLIP: 0.10
 
-Threshold metadata in response includes `threshold_source: "model_policy" | "user"` so consumers know whether calibration was applied.
+Threshold metadata in response includes `threshold_source: "model_policy" | "user" | "calibrated_dataset"` and `calibration_status: "uncalibrated" | "calibrated"`. Model policy defaults are heuristic, not calibrated — the distinction matters for consumers making safety-critical decisions.
 
-**Contrast policy:** Extends existing policy pattern in `temporal_policy.py`. Each model's policy provides:
-- `label_pooling` — how to compute per-frame group scores
-- `temporal_reduction` — default reduction mode
-- `default_threshold` — starting threshold value
+**Contrast policy:** Extends existing policy pattern in `temporal_policy.py`. Explicit method names avoid collision with temporal policy:
+- `contrast_label_pooling()` — how to compute per-frame group scores
+- `contrast_default_reduction()` — default reduction mode
+- `contrast_default_threshold()` — starting threshold value (distinct from `temporal_default_threshold()`)
 - `score_semantics` — reuses existing canonical constants (`siglip2_pairwise_sigmoid`, `clip_relative_softmax`)
 
 ### Response Schema
@@ -107,21 +108,22 @@ ContrastLabelScore:
 
 ContrastGroupResult:
   group: str                # "positive" or "negative"
-  group_score: float        # normalized group score (see scoring pipeline)
+  mean_group_score: float   # mean of per-frame group scores across ALL frames (always mean, regardless of reduction mode)
   labels: list[ContrastLabelScore]
 
 ContrastResult:
   verdict: str              # "positive" | "negative" | "uncertain"
-  difference: float         # video_margin (pos - neg after reduction)
+  difference: float         # video_margin from temporal reduction (NOT necessarily mean_group_score subtraction)
   threshold: float          # effective threshold used
   threshold_was_defaulted: bool
-  threshold_source: str     # "model_policy" | "user"
+  threshold_source: str     # "model_policy" | "user" | "calibrated_dataset"
+  calibration_status: str   # "uncalibrated" | "calibrated"
   contrast_reduce: str      # reduction mode used
   positive: ContrastGroupResult
   negative: ContrastGroupResult
   score_semantics: str      # reuses existing constants
   label_pooling: str        # "mean" (SigLIP2) or "logsumexp_normalized" (CLIP)
-  dominant_label: str       # strongest label inside winning group (null if uncertain)
+  dominant_label: str | None  # strongest label inside winning group (None if uncertain)
 ```
 
 **Top-level `ClassifyResponse` compatibility:** The existing required fields `best_match` and `scores` are populated for backward compatibility:
@@ -153,7 +155,7 @@ ContrastResult:
 **Results display:**
 
 - Verdict banner: large colored badge — green POSITIVE, red NEGATIVE, yellow UNCERTAIN
-- Score summary line: `pos_score - neg_score = difference` with threshold and reduction mode shown
+- Score summary: mean group scores, video margin (difference), threshold, and reduction mode
 - Dominant label callout below verdict (strongest label in winning group)
 - Grouped horizontal bar chart (Chart.js): positive labels as green bars, negative as red bars, sorted by score within each group
 
