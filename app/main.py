@@ -21,6 +21,7 @@ from app.errors.handlers import (
     InferenceConcurrencyError,
     InferenceTimeoutError,
     InvalidAggregationError,
+    InvalidContrastParamsError,
     InvalidFpsError,
     InvalidLabelsError,
     InvalidPromptTemplateError,
@@ -46,7 +47,7 @@ from app.schemas.response import (
     ResolvedTemporalOptions,
 )
 from app.services.frame_timeline import FrameTimeline
-from app.services.scoring import aggregate_frame_scores
+from app.services.scoring import aggregate_frame_scores, VALID_CONTRAST_REDUCTIONS
 from app.services.temporal_policy import get_policy
 from app.services.video import FrameExtractor, probe_video, validate_video_constraints
 from app.temp_store import TempStore
@@ -70,6 +71,34 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 class LoadModelRequest(PydanticBaseModel):
     model_id: str
+
+
+def _parse_label_array(raw: str, field_name: str) -> list[str]:
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        raise InvalidLabelsError(f"{field_name} must be a valid JSON array of strings.")
+    if not isinstance(parsed, list) or not all(isinstance(lb, str) for lb in parsed):
+        raise InvalidLabelsError(f"{field_name} must be a valid JSON array of strings.")
+    return parsed
+
+
+def _validate_label_group(label_list: list[str], field_name: str, max_count: int = 50) -> None:
+    if len(label_list) < 1 or len(label_list) > max_count:
+        raise InvalidLabelsError(
+            f"Number of {field_name} must be between 1 and {max_count} (inclusive)."
+        )
+    seen: set[str] = set()
+    for lb in label_list:
+        if not lb.strip():
+            raise InvalidLabelsError("Each label must be a non-empty string.")
+        if len(lb) > 200:
+            raise InvalidLabelsError(
+                f"Label '{lb[:50]}...' exceeds the maximum length of 200 characters."
+            )
+        if lb in seen:
+            raise InvalidLabelsError(f"Duplicate label: '{lb}'.")
+        seen.add(lb)
 
 
 def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
@@ -210,6 +239,10 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
             "temporal_defaults": temporal_defaults,
         }
 
+    @app.get("/api/v1/labels/defaults")
+    async def label_defaults():
+        return {"labels": settings.default_labels}
+
     @app.get("/")
     async def serve_ui():
         return FileResponse(STATIC_DIR / "index.html")
@@ -224,13 +257,16 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
     @app.post("/api/v1/classify", response_model=ClassifyResponse)
     async def classify(
         video: UploadFile,
-        labels: str = Form(...),
+        labels: str | None = Form(default=None),
+        positive_labels: str | None = Form(default=None),
+        negative_labels: str | None = Form(default=None),
         prompt_template: str = Form(default="This is a photo of {}."),
         fps: float = Form(default=1.0),
         aggregation: str = Form(default="mean"),
         threshold: float | None = Form(default=None, ge=0.0, le=1.0),
         gap_tolerance: float | None = Form(default=None, ge=0.0, le=10.0),
         min_duration: float | None = Form(default=None, ge=0.0, le=10.0),
+        contrast_reduce: str | None = Form(default=None),
     ):
         manager: Optional[ModelManager] = state.get("manager")
         temp_store: Optional[TempStore] = state.get("temp_store")
@@ -244,45 +280,62 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
         if fps < 0.1 or fps > 5.0:
             raise InvalidFpsError(fps)
 
-        if aggregation not in ("mean", "max", "temporal"):
+        if aggregation not in ("mean", "max", "temporal", "contrast"):
             raise InvalidAggregationError(aggregation)
 
+        # Mutual exclusivity: contrast vs standard labels
+        if aggregation == "contrast":
+            if labels is not None:
+                raise InvalidContrastParamsError(
+                    "Use 'positive_labels' and 'negative_labels' with aggregation='contrast', not 'labels'."
+                )
+            if positive_labels is None or negative_labels is None:
+                raise InvalidContrastParamsError(
+                    "Both 'positive_labels' and 'negative_labels' are required with aggregation='contrast'."
+                )
+            if contrast_reduce is not None and contrast_reduce not in VALID_CONTRAST_REDUCTIONS:
+                raise InvalidContrastParamsError(
+                    f"Invalid contrast_reduce '{contrast_reduce}'. "
+                    f"Valid: {', '.join(sorted(VALID_CONTRAST_REDUCTIONS))}."
+                )
+        else:
+            if positive_labels is not None or negative_labels is not None:
+                raise InvalidContrastParamsError(
+                    "'positive_labels' and 'negative_labels' are only valid with aggregation='contrast'."
+                )
+            if contrast_reduce is not None:
+                raise InvalidContrastParamsError(
+                    "'contrast_reduce' is only valid with aggregation='contrast'."
+                )
+            if labels is None:
+                raise InvalidLabelsError("labels must be a valid JSON array of strings.")
+
         raw_temporal = RawTemporalParams(
-            threshold=threshold,
+            threshold=threshold if aggregation == "temporal" else None,
             gap_tolerance=gap_tolerance,
             min_duration=min_duration,
         )
-        if aggregation != "temporal" and raw_temporal.has_any():
+        if aggregation not in ("temporal", "contrast") and raw_temporal.has_any():
             raise InvalidTemporalParamsError()
 
-        try:
-            parsed_labels = json.loads(labels)
-        except (json.JSONDecodeError, ValueError):
-            raise InvalidLabelsError("labels must be a valid JSON array of strings.")
-
-        if not isinstance(parsed_labels, list) or not all(
-            isinstance(lb, str) for lb in parsed_labels
-        ):
-            raise InvalidLabelsError("labels must be a valid JSON array of strings.")
-
-        if len(parsed_labels) < 3 or len(parsed_labels) > 10:
-            raise InvalidLabelsError(
-                "Number of labels must be between 3 and 10 (inclusive)."
-            )
-
-        for lb in parsed_labels:
-            if not lb.strip():
-                raise InvalidLabelsError("Each label must be a non-empty string.")
-            if len(lb) > 200:
-                raise InvalidLabelsError(
-                    f"Label '{lb[:50]}...' exceeds the maximum length of 200 characters."
-                )
-
-        seen: set[str] = set()
-        for lb in parsed_labels:
-            if lb in seen:
-                raise InvalidLabelsError(f"Duplicate label: '{lb}'.")
-            seen.add(lb)
+        # Parse labels based on mode
+        pos_count = 0
+        if aggregation == "contrast":
+            parsed_pos = _parse_label_array(positive_labels, "positive_labels")
+            parsed_neg = _parse_label_array(negative_labels, "negative_labels")
+            _validate_label_group(parsed_pos, "positive_labels", max_count=50)
+            _validate_label_group(parsed_neg, "negative_labels", max_count=50)
+            # Cross-group uniqueness
+            all_labels_set: set[str] = set()
+            for lb in parsed_pos + parsed_neg:
+                if lb in all_labels_set:
+                    raise InvalidLabelsError(f"Duplicate label across groups: '{lb}'.")
+                all_labels_set.add(lb)
+            parsed_labels = parsed_pos + parsed_neg
+            pos_count = len(parsed_pos)
+        else:
+            parsed_labels = _parse_label_array(labels, "labels")
+            _validate_label_group(parsed_labels, "labels", max_count=50)
 
         brace_count = prompt_template.count("{}")
         if brace_count != 1:

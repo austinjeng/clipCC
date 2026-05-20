@@ -104,14 +104,24 @@ async def test_missing_video(client):
 
 
 @pytest.mark.anyio
+async def test_label_defaults(client):
+    r = await client.get("/api/v1/labels/defaults")
+    assert r.status_code == 200
+    data = r.json()
+    assert "labels" in data
+    assert isinstance(data["labels"], list)
+    assert len(data["labels"]) >= 1
+
+
+@pytest.mark.anyio
 async def test_invalid_labels_count(client, small_video):
     r = await client.post(
         "/api/v1/classify",
         files={"video": ("test.mp4", small_video.read_bytes(), "video/mp4")},
-        data={"labels": json.dumps(["a"])},
+        data={"labels": json.dumps([])},
     )
     assert r.status_code == 422
-    assert "3 and 10" in r.json()["detail"]
+    assert "1 and 50" in r.json()["detail"]
 
 
 @pytest.mark.anyio
@@ -290,3 +300,94 @@ class TestLoadModelErrorHandling:
                 assert resp.status_code == 422
                 body = resp.json()
                 assert body["error_type"] == "InsufficientResourcesError"
+
+
+# ── Contrast validation ───────────────────────────────────────────
+
+
+@pytest.mark.anyio
+async def test_contrast_requires_positive_and_negative_labels(client, small_video):
+    r = await client.post(
+        "/api/v1/classify",
+        files={"video": ("test.mp4", small_video.read_bytes(), "video/mp4")},
+        data={
+            "aggregation": "contrast",
+            "positive_labels": json.dumps(["safe driving"]),
+        },
+    )
+    assert r.status_code == 422
+    assert "negative_labels" in r.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_contrast_rejects_labels_field(client, small_video):
+    r = await client.post(
+        "/api/v1/classify",
+        files={"video": ("test.mp4", small_video.read_bytes(), "video/mp4")},
+        data={
+            "aggregation": "contrast",
+            "labels": json.dumps(["a", "b"]),
+            "positive_labels": json.dumps(["safe"]),
+            "negative_labels": json.dumps(["dangerous"]),
+        },
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_non_contrast_rejects_positive_labels(client, small_video):
+    r = await client.post(
+        "/api/v1/classify",
+        files={"video": ("test.mp4", small_video.read_bytes(), "video/mp4")},
+        data={
+            "aggregation": "mean",
+            "labels": json.dumps(["a", "b"]),
+            "positive_labels": json.dumps(["safe"]),
+        },
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_contrast_invalid_reduce_mode(client, small_video):
+    r = await client.post(
+        "/api/v1/classify",
+        files={"video": ("test.mp4", small_video.read_bytes(), "video/mp4")},
+        data={
+            "aggregation": "contrast",
+            "positive_labels": json.dumps(["safe"]),
+            "negative_labels": json.dumps(["dangerous"]),
+            "contrast_reduce": "invalid_mode",
+        },
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_contrast_cross_group_duplicate_rejected(client, small_video):
+    r = await client.post(
+        "/api/v1/classify",
+        files={"video": ("test.mp4", small_video.read_bytes(), "video/mp4")},
+        data={
+            "aggregation": "contrast",
+            "positive_labels": json.dumps(["driving"]),
+            "negative_labels": json.dumps(["driving"]),
+        },
+    )
+    assert r.status_code == 422
+    assert "Duplicate" in r.json()["detail"] or "duplicate" in r.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_contrast_label_count_max_50_per_group(client, small_video):
+    r = await client.post(
+        "/api/v1/classify",
+        files={"video": ("test.mp4", small_video.read_bytes(), "video/mp4")},
+        data={
+            "aggregation": "contrast",
+            "positive_labels": json.dumps([f"pos_{i}" for i in range(51)]),
+            "negative_labels": json.dumps(["neg"]),
+        },
+    )
+    assert r.status_code == 422
+    assert "50" in r.json()["detail"]

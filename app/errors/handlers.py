@@ -129,3 +129,8 @@ class InvalidTemporalParamsError(HTTPException):
             status_code=422,
             detail="Parameters 'threshold', 'gap_tolerance', 'min_duration' are only valid with aggregation='temporal'.",
         )
+
+
+class InvalidContrastParamsError(HTTPException):
+    def __init__(self, detail: str) -> None:
+        super().__init__(status_code=422, detail=detail)
