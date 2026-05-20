@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -76,6 +77,27 @@ def compute_frame_scores(
     scaled_logits = cosine_sim * logit_scale
     confidence = torch.softmax(scaled_logits, dim=-1)
     return confidence, raw_similarity
+
+
+VALID_CONTRAST_REDUCTIONS = {"mean", "top_k_mean", "max", "quantile"}
+
+
+def contrast_reduce(margins: torch.Tensor, mode: str) -> float:
+    if mode == "mean":
+        return margins.mean().item()
+    elif mode == "top_k_mean":
+        k = max(1, math.ceil(len(margins) * 0.10))
+        _, indices = margins.abs().topk(k)
+        return margins[indices].mean().item()
+    elif mode == "max":
+        idx = margins.abs().argmax()
+        return margins[idx].item()
+    elif mode == "quantile":
+        pos = torch.quantile(margins.float(), 0.90).item()
+        neg = torch.quantile(margins.float(), 0.10).item()
+        return pos if abs(pos) >= abs(neg) else neg
+    else:
+        raise ValueError(f"Unknown contrast reduction mode: {mode}")
 
 
 def aggregate_mean(ctx: ScoringContext) -> AggregationResult:

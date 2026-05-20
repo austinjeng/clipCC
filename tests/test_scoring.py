@@ -357,3 +357,60 @@ def test_resolved_contrast_options_user_override():
     assert opts.threshold_was_defaulted is False
     assert opts.threshold_source == "user"
     assert opts.contrast_reduce == "top_k_mean"
+
+
+def test_reduce_mean():
+    from app.services.scoring import contrast_reduce
+    margins = torch.tensor([0.1, 0.2, 0.3, -0.1, -0.2])
+    result = contrast_reduce(margins, "mean")
+    assert abs(result - 0.06) < 1e-5
+
+
+def test_reduce_top_k_mean_positive_event():
+    from app.services.scoring import contrast_reduce
+    margins = torch.tensor([0.01, 0.02, -0.01, 0.8, 0.9, 0.01, -0.02, 0.01, 0.03, 0.02])
+    result = contrast_reduce(margins, "top_k_mean")
+    # k = max(1, ceil(10*0.10)) = 1, picks largest abs = 0.9
+    assert abs(result - 0.9) < 1e-5
+
+
+def test_reduce_top_k_mean_negative_event():
+    from app.services.scoring import contrast_reduce
+    margins = torch.tensor([0.01, 0.02, -0.01, -0.8, -0.9, 0.01, -0.02, 0.01, 0.03, 0.02])
+    result = contrast_reduce(margins, "top_k_mean")
+    assert abs(result - (-0.9)) < 1e-5
+
+
+def test_reduce_top_k_mean_single_frame():
+    from app.services.scoring import contrast_reduce
+    margins = torch.tensor([0.5])
+    result = contrast_reduce(margins, "top_k_mean")
+    assert abs(result - 0.5) < 1e-5
+
+
+def test_reduce_max_positive():
+    from app.services.scoring import contrast_reduce
+    margins = torch.tensor([0.1, -0.3, 0.5, -0.2])
+    result = contrast_reduce(margins, "max")
+    assert abs(result - 0.5) < 1e-5
+
+
+def test_reduce_max_negative_stronger():
+    from app.services.scoring import contrast_reduce
+    margins = torch.tensor([0.1, -0.8, 0.3, -0.2])
+    result = contrast_reduce(margins, "max")
+    assert abs(result - (-0.8)) < 1e-5
+
+
+def test_reduce_quantile_positive_tail():
+    from app.services.scoring import contrast_reduce
+    margins = torch.tensor([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.7])
+    result = contrast_reduce(margins, "quantile")
+    assert result > 0
+
+
+def test_reduce_quantile_negative_tail():
+    from app.services.scoring import contrast_reduce
+    margins = torch.tensor([-0.7, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    result = contrast_reduce(margins, "quantile")
+    assert result < 0
