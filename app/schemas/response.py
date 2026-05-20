@@ -53,6 +53,37 @@ class ResolvedTemporalOptions(BaseModel):
         )
 
 
+class RawContrastParams(BaseModel):
+    threshold: float | None = Field(None, ge=0.0, le=1.0)
+    contrast_reduce: str | None = None
+
+    def has_any(self) -> bool:
+        return self.threshold is not None or self.contrast_reduce is not None
+
+
+class ResolvedContrastOptions(BaseModel):
+    threshold: float
+    threshold_was_defaulted: bool
+    threshold_source: str
+    calibration_status: str
+    contrast_reduce: str
+
+    @classmethod
+    def resolve(
+        cls,
+        raw: RawContrastParams,
+        policy_threshold: float,
+        policy_reduce: str,
+    ) -> "ResolvedContrastOptions":
+        return cls(
+            threshold=raw.threshold if raw.threshold is not None else policy_threshold,
+            threshold_was_defaulted=(raw.threshold is None),
+            threshold_source="user" if raw.threshold is not None else "model_policy",
+            calibration_status="uncalibrated",
+            contrast_reduce=raw.contrast_reduce if raw.contrast_reduce is not None else policy_reduce,
+        )
+
+
 class FrameScore(BaseModel):
     timestamp: float
     frame_index: int
@@ -95,11 +126,38 @@ class TemporalResult(BaseModel):
     threshold_was_defaulted: bool
 
 
+class ContrastLabelScore(BaseModel):
+    label: str
+    score: float
+
+
+class ContrastGroupResult(BaseModel):
+    group: str
+    mean_group_score: float
+    labels: list[ContrastLabelScore]
+
+
+class ContrastResult(BaseModel):
+    verdict: str
+    difference: float
+    threshold: float
+    threshold_was_defaulted: bool
+    threshold_source: str
+    calibration_status: str
+    contrast_reduce: str
+    positive: ContrastGroupResult
+    negative: ContrastGroupResult
+    score_semantics: str
+    label_pooling: str
+    dominant_label: str | None
+
+
 class ClassifyResponse(BaseModel):
     best_match: BestMatch
     scores: list[ScoreItem]
     metadata: ClassifyMetadata
     temporal: TemporalResult | None = None
+    contrast: ContrastResult | None = None
 
 
 class HealthResponse(BaseModel):

@@ -306,3 +306,54 @@ def test_temporal_effective_threshold_in_result():
     assert result.temporal.effective_threshold == 0.6
     assert result.temporal.threshold_was_defaulted is False
     assert result.temporal.threshold_mode == "absolute"
+
+
+def test_contrast_result_serialization():
+    from app.schemas.response import ContrastLabelScore, ContrastGroupResult, ContrastResult
+    result = ContrastResult(
+        verdict="positive",
+        difference=0.27,
+        threshold=0.15,
+        threshold_was_defaulted=True,
+        threshold_source="model_policy",
+        calibration_status="uncalibrated",
+        contrast_reduce="mean",
+        positive=ContrastGroupResult(
+            group="positive",
+            mean_group_score=0.72,
+            labels=[ContrastLabelScore(label="safe driving", score=0.72)],
+        ),
+        negative=ContrastGroupResult(
+            group="negative",
+            mean_group_score=0.45,
+            labels=[ContrastLabelScore(label="dangerous driving", score=0.45)],
+        ),
+        score_semantics="siglip2_pairwise_sigmoid",
+        label_pooling="mean",
+        dominant_label="safe driving",
+    )
+    d = result.model_dump()
+    assert d["verdict"] == "positive"
+    assert d["dominant_label"] == "safe driving"
+    assert d["positive"]["mean_group_score"] == 0.72
+    assert len(d["positive"]["labels"]) == 1
+
+
+def test_resolved_contrast_options_defaults():
+    from app.schemas.response import RawContrastParams, ResolvedContrastOptions
+    raw = RawContrastParams()
+    opts = ResolvedContrastOptions.resolve(raw, policy_threshold=0.15, policy_reduce="mean")
+    assert opts.threshold == 0.15
+    assert opts.threshold_was_defaulted is True
+    assert opts.threshold_source == "model_policy"
+    assert opts.contrast_reduce == "mean"
+
+
+def test_resolved_contrast_options_user_override():
+    from app.schemas.response import RawContrastParams, ResolvedContrastOptions
+    raw = RawContrastParams(threshold=0.25, contrast_reduce="top_k_mean")
+    opts = ResolvedContrastOptions.resolve(raw, policy_threshold=0.15, policy_reduce="mean")
+    assert opts.threshold == 0.25
+    assert opts.threshold_was_defaulted is False
+    assert opts.threshold_source == "user"
+    assert opts.contrast_reduce == "top_k_mean"
