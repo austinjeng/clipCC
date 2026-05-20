@@ -427,6 +427,21 @@ async def test_classify_contrast(client, small_video):
 
 
 @pytest.mark.anyio
+async def test_active_model_includes_contrast_defaults(client):
+    r = await client.get("/api/v1/models/active")
+    assert r.status_code == 200
+    data = r.json()
+    assert "contrast_defaults" in data
+    cd = data["contrast_defaults"]
+    assert "threshold" in cd
+    assert "contrast_reduce" in cd
+    assert "label_pooling" in cd
+    assert cd["threshold"] == 0.15
+    assert cd["contrast_reduce"] == "mean"
+    assert cd["label_pooling"] == "mean"
+
+
+@pytest.mark.anyio
 async def test_classify_contrast_with_user_threshold(client, small_video):
     r = await client.post(
         "/api/v1/classify",

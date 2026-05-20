@@ -236,6 +236,18 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
             except ValueError:
                 pass
 
+        contrast_defaults = None
+        if semantics_str:
+            try:
+                policy = get_policy(semantics_str)
+                contrast_defaults = {
+                    "threshold": policy.contrast_default_threshold(),
+                    "contrast_reduce": policy.contrast_default_reduction(),
+                    "label_pooling": policy.contrast_label_pooling(),
+                }
+            except ValueError:
+                pass
+
         return {
             "model_id": config.model_id,
             "display_name": config.display_name,
@@ -244,6 +256,7 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
             "resolution": config.resolution,
             "device": manager.active_model.device,
             "temporal_defaults": temporal_defaults,
+            "contrast_defaults": contrast_defaults,
         }
 
     @app.get("/api/v1/labels/defaults")
