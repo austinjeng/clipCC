@@ -5,7 +5,7 @@ from app.services.scoring import compute_frame_scores, aggregate_mean, aggregate
 from app.services.scoring import aggregate_temporal, TemporalScoringContext
 from app.services.frame_timeline import FrameTimeline
 from app.services.temporal_policy import SigLip2Policy
-from app.schemas.response import BestMatch, ResolvedTemporalOptions
+from app.schemas.response import BestMatch, ResolvedTemporalOptions, ResolvedContrastOptions
 from app.models.base_model import ScoreBatch
 from app.services.video import FrameSample
 
@@ -414,3 +414,157 @@ def test_reduce_quantile_negative_tail():
     margins = torch.tensor([-0.7, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
     result = contrast_reduce(margins, "quantile")
     assert result < 0
+
+
+def test_aggregate_contrast_siglip2_positive_verdict():
+    from app.services.scoring import aggregate_contrast
+    confidence = torch.tensor([
+        [0.8, 0.7, 0.2],
+        [0.9, 0.8, 0.1],
+        [0.7, 0.6, 0.3],
+        [0.8, 0.7, 0.2],
+        [0.9, 0.8, 0.1],
+    ])
+    frames = [make_frame(i) for i in range(5)]
+    ctx = ScoringContext(
+        confidence=confidence,
+        raw_similarity=confidence.clone(),
+        logits=torch.zeros_like(confidence),
+        semantics="siglip2_pairwise_sigmoid",
+        labels=["safe", "calm", "dangerous"],
+        frames=frames,
+    )
+    opts = ResolvedContrastOptions(
+        threshold=0.15,
+        threshold_was_defaulted=True,
+        threshold_source="model_policy",
+        calibration_status="uncalibrated",
+        contrast_reduce="mean",
+    )
+    policy = SigLip2Policy()
+    result = aggregate_contrast(ctx, pos_count=2, options=opts, policy=policy)
+    assert result.contrast is not None
+    assert result.contrast.verdict == "positive"
+    assert result.contrast.difference > 0.15
+    assert result.contrast.positive.group == "positive"
+    assert result.contrast.negative.group == "negative"
+    assert len(result.contrast.positive.labels) == 2
+    assert len(result.contrast.negative.labels) == 1
+    assert result.contrast.label_pooling == "mean"
+    assert result.contrast.dominant_label is not None
+    assert len(result.scores) == 3
+    assert result.best_match.label is not None
+
+
+def test_aggregate_contrast_siglip2_negative_verdict():
+    from app.services.scoring import aggregate_contrast
+    confidence = torch.tensor([
+        [0.1, 0.2, 0.8, 0.9],
+        [0.2, 0.1, 0.9, 0.8],
+    ])
+    frames = [make_frame(i) for i in range(2)]
+    ctx = ScoringContext(
+        confidence=confidence,
+        raw_similarity=confidence.clone(),
+        logits=torch.zeros_like(confidence),
+        semantics="siglip2_pairwise_sigmoid",
+        labels=["safe", "calm", "reckless", "texting"],
+        frames=frames,
+    )
+    opts = ResolvedContrastOptions(
+        threshold=0.15,
+        threshold_was_defaulted=True,
+        threshold_source="model_policy",
+        calibration_status="uncalibrated",
+        contrast_reduce="mean",
+    )
+    result = aggregate_contrast(ctx, pos_count=2, options=opts, policy=SigLip2Policy())
+    assert result.contrast.verdict == "negative"
+    assert result.contrast.difference < -0.15
+
+
+def test_aggregate_contrast_uncertain_verdict():
+    from app.services.scoring import aggregate_contrast
+    confidence = torch.tensor([
+        [0.5, 0.5, 0.5],
+        [0.5, 0.5, 0.5],
+    ])
+    frames = [make_frame(i) for i in range(2)]
+    ctx = ScoringContext(
+        confidence=confidence,
+        raw_similarity=confidence.clone(),
+        logits=torch.zeros_like(confidence),
+        semantics="siglip2_pairwise_sigmoid",
+        labels=["a", "b", "c"],
+        frames=frames,
+    )
+    opts = ResolvedContrastOptions(
+        threshold=0.15,
+        threshold_was_defaulted=True,
+        threshold_source="model_policy",
+        calibration_status="uncalibrated",
+        contrast_reduce="mean",
+    )
+    result = aggregate_contrast(ctx, pos_count=2, options=opts, policy=SigLip2Policy())
+    assert result.contrast.verdict == "uncertain"
+    assert abs(result.contrast.difference) <= 0.15
+    assert result.contrast.dominant_label is None
+
+
+def test_aggregate_contrast_clip_group_size_imbalance():
+    from app.services.scoring import aggregate_contrast
+    from app.services.temporal_policy import SoftmaxPolicy
+    n_pos, n_neg = 50, 1
+    n_labels = n_pos + n_neg
+    logits = torch.zeros(3, n_labels)
+    confidence = torch.softmax(logits, dim=-1)
+    frames = [make_frame(i) for i in range(3)]
+    ctx = ScoringContext(
+        confidence=confidence,
+        raw_similarity=confidence.clone(),
+        logits=logits,
+        semantics="clip_relative_softmax",
+        labels=[f"pos_{i}" for i in range(n_pos)] + [f"neg_{i}" for i in range(n_neg)],
+        frames=frames,
+    )
+    opts = ResolvedContrastOptions(
+        threshold=0.10,
+        threshold_was_defaulted=True,
+        threshold_source="model_policy",
+        calibration_status="uncalibrated",
+        contrast_reduce="mean",
+    )
+    result = aggregate_contrast(ctx, pos_count=n_pos, options=opts, policy=SoftmaxPolicy())
+    assert result.contrast.verdict == "uncertain"
+    assert abs(result.contrast.difference) < 0.10
+    assert result.contrast.label_pooling == "logsumexp_normalized"
+
+
+def test_aggregate_contrast_top_k_mean_sparse_negative():
+    from app.services.scoring import aggregate_contrast
+    confidence = torch.full((10, 2), 0.5)
+    confidence[7, 0] = 0.1
+    confidence[7, 1] = 0.9
+    frames = [make_frame(i) for i in range(10)]
+    ctx = ScoringContext(
+        confidence=confidence,
+        raw_similarity=confidence.clone(),
+        logits=torch.zeros_like(confidence),
+        semantics="siglip2_pairwise_sigmoid",
+        labels=["safe", "dangerous"],
+        frames=frames,
+    )
+    opts_mean = ResolvedContrastOptions(
+        threshold=0.15, threshold_was_defaulted=True,
+        threshold_source="model_policy", calibration_status="uncalibrated",
+        contrast_reduce="mean",
+    )
+    result_mean = aggregate_contrast(ctx, pos_count=1, options=opts_mean, policy=SigLip2Policy())
+    opts_topk = ResolvedContrastOptions(
+        threshold=0.15, threshold_was_defaulted=True,
+        threshold_source="model_policy", calibration_status="uncalibrated",
+        contrast_reduce="top_k_mean",
+    )
+    result_topk = aggregate_contrast(ctx, pos_count=1, options=opts_topk, policy=SigLip2Policy())
+    assert result_topk.contrast.verdict == "negative"
+    assert result_topk.contrast.difference < result_mean.contrast.difference

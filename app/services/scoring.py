@@ -68,6 +68,7 @@ class AggregationResult:
     scores: list[ScoreItem]
     best_match: BestMatch
     temporal: "TemporalResult | None" = None  # type: ignore[name-defined]
+    contrast: "ContrastResult | None" = None  # type: ignore[name-defined]
 
 
 def compute_frame_scores(
@@ -278,6 +279,99 @@ def aggregate_temporal(
     )
 
 
+def aggregate_contrast(
+    ctx: ScoringContext,
+    pos_count: int,
+    options: "ResolvedContrastOptions",  # type: ignore[name-defined]
+    policy: "TemporalScoringPolicy",  # type: ignore[name-defined]
+) -> AggregationResult:
+    from app.schemas.response import (
+        ContrastGroupResult,
+        ContrastLabelScore,
+        ContrastResult,
+    )
+
+    neg_count = len(ctx.labels) - pos_count
+    pooling = policy.contrast_label_pooling()
+
+    if pooling == "logsumexp_normalized":
+        pos_evidence = torch.logsumexp(ctx.logits[:, :pos_count], dim=1) - math.log(pos_count)
+        neg_evidence = torch.logsumexp(ctx.logits[:, pos_count:], dim=1) - math.log(neg_count)
+        stacked = torch.stack([pos_evidence, neg_evidence], dim=1)
+        probs = torch.softmax(stacked, dim=1)
+        frame_pos = probs[:, 0]
+        frame_neg = probs[:, 1]
+    else:
+        frame_pos = ctx.confidence[:, :pos_count].mean(dim=1)
+        frame_neg = ctx.confidence[:, pos_count:].mean(dim=1)
+
+    frame_margins = frame_pos - frame_neg
+    video_margin = contrast_reduce(frame_margins, options.contrast_reduce)
+
+    if video_margin > options.threshold:
+        verdict = "positive"
+    elif video_margin < -options.threshold:
+        verdict = "negative"
+    else:
+        verdict = "uncertain"
+
+    mean_pos = frame_pos.mean().item()
+    mean_neg = frame_neg.mean().item()
+
+    mean_conf = ctx.confidence.mean(dim=0)
+    pos_label_scores = [
+        ContrastLabelScore(
+            label=ctx.labels[i],
+            score=round(mean_conf[i].item(), 6),
+        )
+        for i in range(pos_count)
+    ]
+    neg_label_scores = [
+        ContrastLabelScore(
+            label=ctx.labels[i],
+            score=round(mean_conf[i].item(), 6),
+        )
+        for i in range(pos_count, len(ctx.labels))
+    ]
+
+    if verdict == "uncertain":
+        dominant_label = None
+    elif verdict == "positive":
+        dominant_label = max(pos_label_scores, key=lambda s: s.score).label
+    else:
+        dominant_label = max(neg_label_scores, key=lambda s: s.score).label
+
+    contrast_result = ContrastResult(
+        verdict=verdict,
+        difference=round(video_margin, 6),
+        threshold=options.threshold,
+        threshold_was_defaulted=options.threshold_was_defaulted,
+        threshold_source=options.threshold_source,
+        calibration_status=options.calibration_status,
+        contrast_reduce=options.contrast_reduce,
+        positive=ContrastGroupResult(
+            group="positive",
+            mean_group_score=round(mean_pos, 6),
+            labels=pos_label_scores,
+        ),
+        negative=ContrastGroupResult(
+            group="negative",
+            mean_group_score=round(mean_neg, 6),
+            labels=neg_label_scores,
+        ),
+        score_semantics=ctx.semantics,
+        label_pooling=pooling,
+        dominant_label=dominant_label,
+    )
+
+    base = aggregate_mean(ctx)
+    return AggregationResult(
+        scores=base.scores,
+        best_match=base.best_match,
+        contrast=contrast_result,
+    )
+
+
 def aggregate_frame_scores(
     batches: list[ScoreBatch],
     labels: list[str],
@@ -286,10 +380,18 @@ def aggregate_frame_scores(
     temporal_options: "ResolvedTemporalOptions | None" = None,  # type: ignore[name-defined]
     timeline: "FrameTimeline | None" = None,  # type: ignore[name-defined]
     policy: "TemporalScoringPolicy | None" = None,  # type: ignore[name-defined]
+    contrast_options: "ResolvedContrastOptions | None" = None,  # type: ignore[name-defined]
+    pos_count: int = 0,
 ) -> AggregationResult:
     ctx = ScoringContext.from_batches(batches, labels, frames)
 
-    if aggregation == "temporal":
+    if aggregation == "contrast":
+        if policy is None or contrast_options is None:
+            raise ValueError(
+                "Contrast aggregation requires policy and contrast_options"
+            )
+        return aggregate_contrast(ctx, pos_count, contrast_options, policy)
+    elif aggregation == "temporal":
         if timeline is None or policy is None or temporal_options is None:
             raise ValueError(
                 "Temporal aggregation requires timeline, policy, and temporal_options"
