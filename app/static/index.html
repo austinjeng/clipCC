@@ -75,6 +75,39 @@ button:disabled { background: #93b4f5; cursor: not-allowed; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .error-msg { color: #dc2626; font-size: 0.85rem; margin-top: 0.5rem; }
 .hint { font-size: 0.78rem; color: #888; margin-top: -0.5rem; margin-bottom: 0.75rem; }
+.label-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.75rem; }
+.label-chip {
+  padding: 0.35rem 0.75rem;
+  border: 1px solid #d0d0d0;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  font-family: inherit;
+  cursor: pointer;
+  background: #fff;
+  color: #374151;
+  user-select: none;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.label-chip:hover { border-color: #2563eb; }
+.label-chip.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+.label-row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.25rem; }
+.label-row input[type="text"] { flex: 1; margin-bottom: 0; }
+.csv-btn {
+  display: inline-block;
+  padding: 0.5rem 0.75rem;
+  background: #f3f4f6;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  white-space: nowrap;
+  color: #374151;
+  margin-bottom: 0;
+}
+.csv-btn:hover { background: #e5e7eb; }
+.csv-btn.danger:hover { background: #fee2e2; border-color: #dc2626; color: #dc2626; }
+.label-chip.csv { background: #16a34a; border-color: #16a34a; color: #fff; }
+.label-chip.csv:not(.active) { background: #fff; color: #374151; border-color: #d0d0d0; }
 
 /* Temporal panel */
 #temporal-panel {
@@ -174,6 +207,7 @@ input[type="range"] {
 .bar-track { background: #e5e7eb; border-radius: 4px; height: 20px; overflow: hidden; }
 .bar-fill { background: #2563eb; height: 100%; border-radius: 4px; transition: width 0.4s ease; min-width: 2px; }
 .best-match { font-size: 0.9rem; font-weight: 600; margin-bottom: 0.75rem; }
+.peak-info { font-size: 0.75rem; color: #888; margin-top: 0.15rem; }
 .meta-info { font-size: 0.78rem; color: #888; margin-top: 0.75rem; line-height: 1.6; }
 
 /* Temporal results */
@@ -228,6 +262,89 @@ input[type="range"] {
   padding: 0.5rem 0;
   text-align: center;
 }
+
+/* Contrast mode */
+#contrast-label-section { display: none; }
+.contrast-panels { display: flex; gap: 1rem; }
+.contrast-panel {
+  flex: 1;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 0.75rem;
+}
+.contrast-panel.positive { border-left: 3px solid #22c55e; }
+.contrast-panel.negative { border-left: 3px solid #ef4444; }
+.contrast-panel h4 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 0.5rem;
+}
+.contrast-panel.positive h4 { color: #16a34a; }
+.contrast-panel.negative h4 { color: #dc2626; }
+.contrast-panel input[type="text"] { margin-bottom: 0.4rem; }
+.contrast-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-bottom: 0.4rem; min-height: 1.5rem; }
+.contrast-chip {
+  padding: 0.2rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+.contrast-chip.pos { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+.contrast-chip.neg { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+.contrast-chip .remove-chip {
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 0.7rem;
+  opacity: 0.6;
+}
+.contrast-chip .remove-chip:hover { opacity: 1; }
+.contrast-counter { font-size: 0.75rem; color: #9ca3af; text-align: right; }
+.contrast-csv-row { display: flex; gap: 0.4rem; align-items: center; }
+
+#contrast-panel {
+  display: none;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 0.85rem 1rem;
+  margin-bottom: 0.75rem;
+}
+#contrast-panel h3 {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 0.6rem;
+}
+
+/* Verdict badge */
+.verdict-banner {
+  text-align: center;
+  padding: 0.75rem;
+  border-radius: 8px;
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.75rem;
+}
+.verdict-positive { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+.verdict-negative { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+.verdict-uncertain { background: #fef9c3; color: #854d0e; border: 1px solid #fde047; }
+.verdict-detail {
+  font-size: 0.82rem;
+  color: #6b7280;
+  text-align: center;
+  margin-bottom: 0.75rem;
+}
+.dominant-label {
+  font-size: 0.85rem;
+  text-align: center;
+  margin-bottom: 0.75rem;
+  color: #374151;
+}
+#contrast-results { display: none; }
+#contrast-chart-container { height: 300px; margin-bottom: 0.75rem; }
 </style>
 </head>
 <body>
@@ -258,9 +375,45 @@ input[type="range"] {
     <label for="video-input">Video file</label>
     <input type="file" id="video-input" accept=".mp4,.avi,.mov,.mkv">
 
-    <label for="labels-input">Labels</label>
-    <input type="text" id="labels-input" placeholder='e.g. cat, dog, bird'>
-    <p class="hint">Comma-separated (3-10 labels). JSON array also accepted.</p>
+    <label>Labels</label>
+    <div class="label-chips" id="label-chips"></div>
+    <div class="label-row">
+      <input type="text" id="labels-input" placeholder="Add custom labels (comma-separated)">
+      <label class="csv-btn" for="csv-input">Import CSV</label>
+      <input type="file" id="csv-input" accept=".csv,.txt" style="display:none">
+      <button type="button" id="csv-clear-btn" class="csv-btn danger" style="display:none">Clear CSV</button>
+    </div>
+    <p class="hint" id="labels-hint">Toggle presets, type custom labels, or import a CSV file. 1–50 labels.</p>
+
+    <!-- Contrast Label Section (shown only in contrast mode) -->
+    <div id="contrast-label-section">
+      <label>Labels</label>
+      <div class="contrast-panels">
+        <div class="contrast-panel positive">
+          <h4>Positive Labels</h4>
+          <input type="text" id="pos-labels-input" placeholder="Comma-separated labels">
+          <div class="contrast-csv-row">
+            <label class="csv-btn" for="pos-csv-input">Import CSV</label>
+            <input type="file" id="pos-csv-input" accept=".csv,.txt" style="display:none">
+            <button type="button" id="pos-csv-clear" class="csv-btn danger" style="display:none">Clear</button>
+          </div>
+          <div class="contrast-chips" id="pos-chips"></div>
+          <div class="contrast-counter" id="pos-counter">0 / 50</div>
+        </div>
+        <div class="contrast-panel negative">
+          <h4>Negative Labels</h4>
+          <input type="text" id="neg-labels-input" placeholder="Comma-separated labels">
+          <div class="contrast-csv-row">
+            <label class="csv-btn" for="neg-csv-input">Import CSV</label>
+            <input type="file" id="neg-csv-input" accept=".csv,.txt" style="display:none">
+            <button type="button" id="neg-csv-clear" class="csv-btn danger" style="display:none">Clear</button>
+          </div>
+          <div class="contrast-chips" id="neg-chips"></div>
+          <div class="contrast-counter" id="neg-counter">0 / 50</div>
+        </div>
+      </div>
+      <p class="hint">Enter positive and negative labels. 1-50 per group.</p>
+    </div>
 
     <label for="prompt-input">Prompt template</label>
     <input type="text" id="prompt-input" value="This is a photo of {}.">
@@ -276,6 +429,7 @@ input[type="range"] {
           <option value="mean">mean</option>
           <option value="max">max</option>
           <option value="temporal">temporal</option>
+          <option value="contrast">contrast</option>
         </select>
       </div>
     </div>
@@ -322,6 +476,36 @@ input[type="range"] {
       </div>
     </div>
 
+    <!-- Contrast Parameter Panel -->
+    <div id="contrast-panel">
+      <h3>Contrast Parameters</h3>
+      <div class="slider-row">
+        <div class="slider-header">
+          <label for="contrast-threshold-slider">Contrast Threshold</label>
+          <span class="tooltip-icon">?
+            <span class="tooltip-card">Minimum margin between positive and negative group scores to render a verdict. Higher = stricter, more uncertain results.</span>
+          </span>
+          <span class="slider-value" id="contrast-threshold-value">0.15</span>
+          <span class="slider-default-tag" id="contrast-threshold-default-tag">(model default)</span>
+        </div>
+        <input type="range" id="contrast-threshold-slider" min="0" max="1" step="0.01" value="0.15">
+      </div>
+      <div class="slider-row">
+        <div class="slider-header">
+          <label for="contrast-reduce-select">Reduction</label>
+          <span class="tooltip-icon">?
+            <span class="tooltip-card">How per-frame margins are combined. 'mean' averages all frames. 'top_k_mean' focuses on the 10% strongest frames. 'max' takes the single strongest. 'quantile' uses 90th/10th percentile.</span>
+          </span>
+        </div>
+        <select id="contrast-reduce-select" style="margin-bottom:0">
+          <option value="mean">mean (whole-video)</option>
+          <option value="top_k_mean">top_k_mean (sparse events)</option>
+          <option value="max">max (single strongest)</option>
+          <option value="quantile">quantile (robust)</option>
+        </select>
+      </div>
+    </div>
+
     <button id="classify-btn" type="button" disabled>Classify</button>
     <div id="classify-error" class="error-msg"></div>
   </div>
@@ -337,6 +521,16 @@ input[type="range"] {
         <canvas id="timeline-chart"></canvas>
       </div>
       <div id="seg-table-wrap"></div>
+    </div>
+
+    <!-- Contrast Results -->
+    <div id="contrast-results">
+      <div class="verdict-banner" id="verdict-banner"></div>
+      <div class="verdict-detail" id="verdict-detail"></div>
+      <div class="dominant-label" id="dominant-label"></div>
+      <div id="contrast-chart-container">
+        <canvas id="contrast-chart"></canvas>
+      </div>
     </div>
 
     <!-- Standard Results -->
@@ -358,7 +552,14 @@ input[type="range"] {
   var statusDot = document.getElementById('status-dot');
   var statusText = document.getElementById('status-text');
   var videoInput = document.getElementById('video-input');
+  var labelChips = document.getElementById('label-chips');
+  var labelsHint = document.getElementById('labels-hint');
   var labelsInput = document.getElementById('labels-input');
+  var csvInput = document.getElementById('csv-input');
+  var csvClearBtn = document.getElementById('csv-clear-btn');
+  var defaultLabels = [];
+  var selectedLabels = {};
+  var csvLabels = [];
   var promptInput = document.getElementById('prompt-input');
   var fpsInput = document.getElementById('fps-input');
   var aggSelect = document.getElementById('agg-select');
@@ -406,6 +607,31 @@ input[type="range"] {
     return span;
   }
 
+  function renderLabelChips(labels, extraClass) {
+    labels.forEach(function (lbl) {
+      if (selectedLabels.hasOwnProperty(lbl)) return;
+      var cls = 'label-chip' + (extraClass ? ' ' + extraClass : '');
+      var chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = cls + ' active';
+      chip.textContent = lbl;
+      selectedLabels[lbl] = true;
+      chip.addEventListener('click', function () {
+        selectedLabels[lbl] = !selectedLabels[lbl];
+        chip.className = selectedLabels[lbl] ? cls + ' active' : cls;
+      });
+      labelChips.appendChild(chip);
+    });
+  }
+
+  function rebuildChips() {
+    while (labelChips.firstChild) labelChips.removeChild(labelChips.firstChild);
+    selectedLabels = {};
+    renderLabelChips(defaultLabels);
+    if (csvLabels.length) renderLabelChips(csvLabels, 'csv');
+    csvClearBtn.style.display = csvLabels.length ? '' : 'none';
+  }
+
   // -------------------------
   // Temporal defaults
   // -------------------------
@@ -415,6 +641,13 @@ input[type="range"] {
       .then(function (data) {
         temporalDefaults = data.temporal_defaults || null;
         applyTemporalDefaults();
+        var cd = data.contrast_defaults || null;
+        if (cd) {
+          contrastThresholdSlider.value = cd.threshold;
+          contrastThresholdValue.textContent = cd.threshold.toFixed(2);
+          contrastThresholdDirty = false;
+          contrastThresholdDefaultTag.style.display = '';
+        }
       })
       .catch(function () {
         temporalDefaults = null;
@@ -443,10 +676,22 @@ input[type="range"] {
   // Aggregation toggle
   // -------------------------
   aggSelect.addEventListener('change', function () {
-    if (aggSelect.value === 'temporal') {
-      temporalPanel.style.display = 'block';
+    var mode = aggSelect.value;
+    temporalPanel.style.display = mode === 'temporal' ? 'block' : 'none';
+    var contrastPanel = document.getElementById('contrast-panel');
+    contrastPanel.style.display = mode === 'contrast' ? 'block' : 'none';
+
+    var contrastLabelSection = document.getElementById('contrast-label-section');
+    if (mode === 'contrast') {
+      labelChips.style.display = 'none';
+      document.querySelector('.label-row').style.display = 'none';
+      labelsHint.style.display = 'none';
+      contrastLabelSection.style.display = 'block';
     } else {
-      temporalPanel.style.display = 'none';
+      labelChips.style.display = '';
+      document.querySelector('.label-row').style.display = '';
+      labelsHint.style.display = '';
+      contrastLabelSection.style.display = 'none';
     }
   });
 
@@ -491,6 +736,139 @@ input[type="range"] {
       setStatus('none', 'Failed to fetch models');
     });
 
+  fetch('/api/v1/labels/defaults')
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      defaultLabels = data.labels || [];
+      rebuildChips();
+    })
+    .catch(function () {
+      labelsHint.textContent = 'Failed to load default labels.';
+    });
+
+  csvInput.addEventListener('change', function () {
+    var file = csvInput.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      var lines = e.target.result.split(/\r?\n/);
+      var newLabels = lines.map(function (s) { return s.trim(); }).filter(Boolean);
+      var existing = {};
+      csvLabels.forEach(function (lbl) { existing[lbl] = true; });
+      newLabels.forEach(function (lbl) {
+        if (!existing[lbl]) csvLabels.push(lbl);
+      });
+      rebuildChips();
+    };
+    reader.readAsText(file);
+    csvInput.value = '';
+  });
+
+  csvClearBtn.addEventListener('click', function () {
+    csvLabels = [];
+    rebuildChips();
+  });
+
+  // -------------------------
+  // Contrast label management
+  // -------------------------
+  var posLabels = [];
+  var negLabels = [];
+  var posChips = document.getElementById('pos-chips');
+  var negChips = document.getElementById('neg-chips');
+  var posCounter = document.getElementById('pos-counter');
+  var negCounter = document.getElementById('neg-counter');
+  var posInput = document.getElementById('pos-labels-input');
+  var negInput = document.getElementById('neg-labels-input');
+  var posCsvInput = document.getElementById('pos-csv-input');
+  var negCsvInput = document.getElementById('neg-csv-input');
+  var posCsvClear = document.getElementById('pos-csv-clear');
+  var negCsvClear = document.getElementById('neg-csv-clear');
+  var contrastThresholdSlider = document.getElementById('contrast-threshold-slider');
+  var contrastThresholdValue = document.getElementById('contrast-threshold-value');
+  var contrastThresholdDefaultTag = document.getElementById('contrast-threshold-default-tag');
+  var contrastThresholdDirty = false;
+  var contrastReduceSelect = document.getElementById('contrast-reduce-select');
+
+  function renderContrastChips(container, labels, cls) {
+    while (container.firstChild) container.removeChild(container.firstChild);
+    labels.forEach(function (lbl, idx) {
+      var chip = document.createElement('span');
+      chip.className = 'contrast-chip ' + cls;
+      chip.textContent = lbl + ' ';
+      var x = document.createElement('span');
+      x.className = 'remove-chip';
+      x.textContent = '×';
+      x.addEventListener('click', function () {
+        labels.splice(idx, 1);
+        renderContrastChips(container, labels, cls);
+        updateContrastCounters();
+      });
+      chip.appendChild(x);
+      container.appendChild(chip);
+    });
+  }
+
+  function updateContrastCounters() {
+    posCounter.textContent = posLabels.length + ' / 50';
+    negCounter.textContent = negLabels.length + ' / 50';
+  }
+
+  function addContrastLabels(input, labelArr, container, cls) {
+    var text = input.value.trim();
+    if (!text) return;
+    var newLabels = text.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
+    newLabels.forEach(function (lbl) {
+      if (labelArr.length < 50 && labelArr.indexOf(lbl) === -1) labelArr.push(lbl);
+    });
+    input.value = '';
+    renderContrastChips(container, labelArr, cls);
+    updateContrastCounters();
+  }
+
+  posInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); addContrastLabels(posInput, posLabels, posChips, 'pos'); }
+  });
+  negInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter') { e.preventDefault(); addContrastLabels(negInput, negLabels, negChips, 'neg'); }
+  });
+
+  function handleContrastCsv(fileInput, labelArr, container, cls, clearBtn) {
+    fileInput.addEventListener('change', function () {
+      var file = fileInput.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function (e) {
+        var lines = e.target.result.split(/\r?\n/).map(function (s) { return s.trim(); }).filter(Boolean);
+        lines.forEach(function (lbl) {
+          if (labelArr.length < 50 && labelArr.indexOf(lbl) === -1) labelArr.push(lbl);
+        });
+        renderContrastChips(container, labelArr, cls);
+        updateContrastCounters();
+        clearBtn.style.display = '';
+      };
+      reader.readAsText(file);
+      fileInput.value = '';
+    });
+    clearBtn.addEventListener('click', function () {
+      labelArr.length = 0;
+      renderContrastChips(container, labelArr, cls);
+      updateContrastCounters();
+      clearBtn.style.display = 'none';
+    });
+  }
+
+  handleContrastCsv(posCsvInput, posLabels, posChips, 'pos', posCsvClear);
+  handleContrastCsv(negCsvInput, negLabels, negChips, 'neg', negCsvClear);
+
+  contrastThresholdSlider.addEventListener('input', function () {
+    contrastThresholdValue.textContent = parseFloat(contrastThresholdSlider.value).toFixed(2);
+    if (!contrastThresholdDirty) {
+      contrastThresholdDirty = true;
+      contrastThresholdDefaultTag.style.display = 'none';
+    }
+  });
+
   // -------------------------
   // Load model
   // -------------------------
@@ -519,6 +897,8 @@ input[type="range"] {
         thresholdDirty = false;
         thresholdDefaultTag.style.display = '';
         fetchTemporalDefaults();
+        contrastThresholdDirty = false;
+        contrastThresholdDefaultTag.style.display = '';
       })
       .catch(function (err) {
         setStatus('none', 'Error: ' + err.message);
@@ -530,18 +910,6 @@ input[type="range"] {
   });
 
   // -------------------------
-  // Parse labels
-  // -------------------------
-  function parseLabels(raw) {
-    raw = raw.trim();
-    if (!raw) return [];
-    if (raw.charAt(0) === '[') {
-      try { return JSON.parse(raw); } catch (e) { /* fall through */ }
-    }
-    return raw.split(',').map(function (s) { return s.trim(); }).filter(Boolean);
-  }
-
-  // -------------------------
   // Classify
   // -------------------------
   classifyBtn.addEventListener('click', function () {
@@ -551,25 +919,59 @@ input[type="range"] {
     var file = videoInput.files[0];
     if (!file) { classifyError.textContent = 'Please select a video file.'; return; }
 
-    var labels = parseLabels(labelsInput.value);
-    if (labels.length < 3 || labels.length > 10) {
-      classifyError.textContent = 'Please provide between 3 and 10 labels.';
-      return;
+    var isContrast = aggSelect.value === 'contrast';
+    var labels;
+
+    if (isContrast) {
+      addContrastLabels(posInput, posLabels, posChips, 'pos');
+      addContrastLabels(negInput, negLabels, negChips, 'neg');
+      if (posLabels.length < 1 || negLabels.length < 1) {
+        classifyError.textContent = 'Provide at least 1 positive and 1 negative label.';
+        return;
+      }
+      if (posLabels.length > 50 || negLabels.length > 50) {
+        classifyError.textContent = 'Maximum 50 labels per group.';
+        return;
+      }
+    } else {
+      var chipLabels = defaultLabels.concat(csvLabels).filter(function (lbl) {
+        return selectedLabels[lbl];
+      });
+      var customLabels = labelsInput.value.trim()
+        ? labelsInput.value.split(',').map(function (s) { return s.trim(); }).filter(Boolean)
+        : [];
+      var seen = {};
+      labels = chipLabels.concat(customLabels).filter(function (lbl) {
+        if (seen[lbl]) return false;
+        seen[lbl] = true;
+        return true;
+      });
+      if (labels.length < 1 || labels.length > 50) {
+        classifyError.textContent = 'Please provide between 1 and 50 labels.';
+        return;
+      }
     }
 
     var form = new FormData();
     form.append('video', file);
-    form.append('labels', JSON.stringify(labels));
     form.append('prompt_template', promptInput.value);
     form.append('fps', fpsInput.value);
     form.append('aggregation', aggSelect.value);
 
-    if (aggSelect.value === 'temporal') {
-      if (thresholdDirty) {
-        form.append('threshold', thresholdSlider.value);
+    if (isContrast) {
+      form.append('positive_labels', JSON.stringify(posLabels));
+      form.append('negative_labels', JSON.stringify(negLabels));
+      if (contrastThresholdDirty) {
+        form.append('threshold', contrastThresholdSlider.value);
       }
-      form.append('gap_tolerance', gapSlider.value);
-      form.append('min_duration', mindurSlider.value);
+      form.append('contrast_reduce', contrastReduceSelect.value);
+    } else {
+      form.append('labels', JSON.stringify(labels));
+      if (aggSelect.value === 'temporal') {
+        if (thresholdDirty) form.append('threshold', thresholdSlider.value);
+        form.append('gap_tolerance', gapSlider.value);
+        form.append('min_duration', mindurSlider.value);
+      }
     }
 
     classifyBtn.disabled = true;
@@ -597,26 +999,30 @@ input[type="range"] {
   // Render results
   // -------------------------
   function renderResults(data) {
-    // Destroy previous chart if any
     if (activeChart) {
-      try { activeChart.destroy(); } catch (e) { /* ignore */ }
+      try { activeChart.destroy(); } catch (e) {}
       activeChart = null;
     }
 
     var isTemporal = data.temporal && aggSelect.value === 'temporal';
+    var isContrast = data.contrast && aggSelect.value === 'contrast';
 
-    if (isTemporal) {
+    temporalResults.style.display = 'none';
+    document.getElementById('contrast-results').style.display = 'none';
+    standardResults.style.display = 'none';
+
+    if (isContrast) {
+      document.getElementById('contrast-results').style.display = 'block';
+      renderContrast(data.contrast);
+    } else if (isTemporal) {
       temporalResults.style.display = 'block';
-      standardResults.style.display = 'none';
       renderTemporal(data.temporal, data.scores);
     } else {
-      temporalResults.style.display = 'none';
       standardResults.style.display = 'block';
       renderStandard(data);
     }
 
     var m = data.metadata;
-    // Clear meta-info safely
     while (metaInfo.firstChild) { metaInfo.removeChild(metaInfo.firstChild); }
     metaInfo.appendChild(document.createTextNode(
       'Frames: ' + m.frames_analyzed +
@@ -626,8 +1032,13 @@ input[type="range"] {
       ' | Aggregation: ' + m.aggregation +
       ' | Time: ' + m.processing_time_seconds.toFixed(2) + 's'
     ));
-
     resultsSection.style.display = 'block';
+  }
+
+  function fmtTime(sec) {
+    var m = Math.floor(sec / 60);
+    var s = (sec % 60).toFixed(1);
+    return m + ':' + (s < 10 ? '0' : '') + s;
   }
 
   function renderStandard(data) {
@@ -670,7 +1081,95 @@ input[type="range"] {
       track.appendChild(fill);
       item.appendChild(labelRow);
       item.appendChild(track);
+
+      if (s.approx_timestamp_seconds != null) {
+        var peakDiv = document.createElement('div');
+        peakDiv.className = 'peak-info';
+        peakDiv.textContent = 'peak @ ' + fmtTime(s.approx_timestamp_seconds) +
+          ' · frame ' + s.peak_frame_index;
+        item.appendChild(peakDiv);
+      }
+
       scoreBars.appendChild(item);
+    });
+  }
+
+  function renderContrast(contrast) {
+    var banner = document.getElementById('verdict-banner');
+    var detail = document.getElementById('verdict-detail');
+    var domLabel = document.getElementById('dominant-label');
+
+    while (banner.firstChild) banner.removeChild(banner.firstChild);
+    banner.textContent = contrast.verdict.toUpperCase();
+    banner.className = 'verdict-banner verdict-' + contrast.verdict;
+
+    while (detail.firstChild) detail.removeChild(detail.firstChild);
+    detail.textContent =
+      'Positive: ' + contrast.positive.mean_group_score.toFixed(3) +
+      ' | Negative: ' + contrast.negative.mean_group_score.toFixed(3) +
+      ' | Margin: ' + contrast.difference.toFixed(3) +
+      ' | Threshold: ±' + contrast.threshold.toFixed(2) +
+      ' | Reduce: ' + contrast.contrast_reduce;
+
+    while (domLabel.firstChild) domLabel.removeChild(domLabel.firstChild);
+    if (contrast.dominant_label) {
+      var strong = document.createElement('strong');
+      strong.textContent = 'Dominant: ';
+      domLabel.appendChild(strong);
+      domLabel.appendChild(document.createTextNode(contrast.dominant_label));
+    }
+
+    var chartContainer = document.getElementById('contrast-chart-container');
+    while (chartContainer.firstChild) chartContainer.removeChild(chartContainer.firstChild);
+    var canvas = document.createElement('canvas');
+    canvas.id = 'contrast-chart';
+    chartContainer.appendChild(canvas);
+
+    if (typeof Chart === 'undefined') return;
+
+    var posLabels = contrast.positive.labels.slice().sort(function (a, b) { return b.score - a.score; });
+    var negLabels = contrast.negative.labels.slice().sort(function (a, b) { return b.score - a.score; });
+    var allLabels = posLabels.concat(negLabels);
+    var chartLabels = allLabels.map(function (l) { return l.label; });
+    var chartData = allLabels.map(function (l) { return parseFloat((l.score * 100).toFixed(2)); });
+    var chartColors = posLabels.map(function () { return '#22c55e'; })
+      .concat(negLabels.map(function () { return '#ef4444'; }));
+
+    activeChart = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: chartLabels,
+        datasets: [{
+          data: chartData,
+          backgroundColor: chartColors,
+          borderWidth: 0,
+          barThickness: 18
+        }]
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        scales: {
+          x: {
+            min: 0,
+            max: 100,
+            ticks: { font: { size: 11 }, callback: function (v) { return v + '%'; } }
+          },
+          y: {
+            ticks: { font: { size: 11 } }
+          }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: function (ctx) { return ctx.parsed.x.toFixed(1) + '%'; }
+            }
+          }
+        }
+      }
     });
   }
 
