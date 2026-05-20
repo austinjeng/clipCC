@@ -60,3 +60,16 @@ def test_get_policy_clip():
 def test_get_policy_unknown_raises():
     with pytest.raises(ValueError, match="No temporal scoring policy"):
         get_policy("unknown_semantics")
+
+def test_siglip2_contrast_defaults():
+    policy = SigLip2Policy()
+    assert policy.contrast_label_pooling() == "mean"
+    assert policy.contrast_default_threshold() == 0.15
+    assert policy.contrast_default_reduction() == "mean"
+
+
+def test_softmax_contrast_defaults():
+    policy = SoftmaxPolicy()
+    assert policy.contrast_label_pooling() == "logsumexp_normalized"
+    assert policy.contrast_default_threshold() == 0.10
+    assert policy.contrast_default_reduction() == "mean"
