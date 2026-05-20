@@ -1,7 +1,7 @@
 # Contrast Scoring Mode
 
 **Date:** 2026-05-20
-**Status:** Approved (rev 3 — sign-symmetric reductions, response clarity)
+**Status:** Approved (rev 4 — final)
 
 ## Overview
 
@@ -72,7 +72,7 @@ video_margin = temporal_reduce(frame_margin, mode)
 Reduction modes (all sign-symmetric — detect both positive and negative sparse events equally):
 
 - `"mean"` (default) — average margin across all frames. Best for whole-video classification (mood, topic, setting).
-- `"top_k_mean"` — mean of top-K% frames ranked by `abs(frame_margin)` (K=10), preserving original signed values. Better for sparse-event detection (brief dangerous moment in long video).
+- `"top_k_mean"` — select `k = max(1, ceil(num_frames * 0.10))` frames ranked by `abs(frame_margin)`, return mean of their original signed values. Better for sparse-event detection (brief dangerous moment in long video).
 - `"max"` — frame with largest `abs(frame_margin)`, returning its signed value: `idx = argmax(abs(frame_margin)); video_margin = frame_margin[idx]`. Most sensitive to outliers.
 - `"quantile"` — computes both 90th percentile (positive tail) and 10th percentile (negative tail), returns whichever has larger absolute value: `pos = quantile(0.90); neg = quantile(0.10); video_margin = pos if abs(pos) >= abs(neg) else neg`. Robust to outliers while catching sparse events in either direction.
 
@@ -96,7 +96,7 @@ Threshold metadata in response includes `threshold_source: "model_policy" | "use
 **Contrast policy:** Extends existing policy pattern in `temporal_policy.py`. Explicit method names avoid collision with temporal policy:
 - `contrast_label_pooling()` — how to compute per-frame group scores
 - `contrast_default_reduction()` — default reduction mode
-- `contrast_default_threshold()` — starting threshold value (distinct from `temporal_default_threshold()`)
+- `contrast_default_threshold()` — starting threshold value (distinct from existing `default_threshold()` used by temporal)
 - `score_semantics` — reuses existing canonical constants (`siglip2_pairwise_sigmoid`, `clip_relative_softmax`)
 
 ### Response Schema
