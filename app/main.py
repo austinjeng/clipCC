@@ -42,8 +42,10 @@ from app.schemas.response import (
     ClassifyMetadata,
     ClassifyResponse,
     HealthResponse,
+    RawContrastParams,
     RawTemporalParams,
     ReadyResponse,
+    ResolvedContrastOptions,
     ResolvedTemporalOptions,
 )
 from app.services.frame_timeline import FrameTimeline
@@ -63,6 +65,11 @@ DISCLAIMER_MEAN = (
 DISCLAIMER_MAX = (
     "Scores are relative to the supplied labels, not calibrated probabilities. "
     "Max-mode scores are independent peaks per label and do not sum to 1. "
+    "Not suitable for safety-critical decisions."
+)
+DISCLAIMER_CONTRAST = (
+    "Contrast verdict is based on group score difference vs threshold. "
+    "Model policy defaults are heuristic, not calibrated. "
     "Not suitable for safety-critical decisions."
 )
 
@@ -419,7 +426,20 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
 
                         all_batches, all_frames = result
 
-                        if aggregation == "temporal":
+                        contrast_opts = None
+                        if aggregation == "contrast":
+                            batch_semantics = all_batches[0].semantics if all_batches else ""
+                            policy = get_policy(batch_semantics)
+                            raw_contrast = RawContrastParams(
+                                threshold=threshold,
+                                contrast_reduce=contrast_reduce,
+                            )
+                            contrast_opts = ResolvedContrastOptions.resolve(
+                                raw_contrast,
+                                policy.contrast_default_threshold(),
+                                policy.contrast_default_reduction(),
+                            )
+                        elif aggregation == "temporal":
                             batch_semantics = all_batches[0].semantics if all_batches else ""
                             policy = get_policy(batch_semantics)
                             temporal_opts = ResolvedTemporalOptions.resolve(
@@ -432,10 +452,17 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
                         temporal_options=temporal_opts,
                         timeline=timeline,
                         policy=policy,
+                        contrast_options=contrast_opts,
+                        pos_count=pos_count,
                     )
 
                     processing_time = time.monotonic() - start_time
-                    disclaimer = DISCLAIMER_MAX if aggregation == "max" else DISCLAIMER_MEAN
+                    if aggregation == "contrast":
+                        disclaimer = DISCLAIMER_CONTRAST
+                    elif aggregation == "max":
+                        disclaimer = DISCLAIMER_MAX
+                    else:
+                        disclaimer = DISCLAIMER_MEAN
                     semantics = all_batches[0].semantics if all_batches else ""
 
                     return ClassifyResponse(
@@ -453,6 +480,7 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
                             score_semantics=semantics,
                         ),
                         temporal=agg_result.temporal,
+                        contrast=agg_result.contrast,
                     )
 
                 except InferenceConcurrencyError:

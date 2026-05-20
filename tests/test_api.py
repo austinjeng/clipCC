@@ -391,3 +391,57 @@ async def test_contrast_label_count_max_50_per_group(client, small_video):
     )
     assert r.status_code == 422
     assert "50" in r.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_classify_contrast(client, small_video):
+    r = await client.post(
+        "/api/v1/classify",
+        files={"video": ("test.mp4", small_video.read_bytes(), "video/mp4")},
+        data={
+            "aggregation": "contrast",
+            "positive_labels": json.dumps(["outdoor scene", "nature"]),
+            "negative_labels": json.dumps(["indoor scene"]),
+        },
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["metadata"]["aggregation"] == "contrast"
+    assert "contrast" in data
+    c = data["contrast"]
+    assert c["verdict"] in ("positive", "negative", "uncertain")
+    assert "difference" in c
+    assert "threshold" in c
+    assert c["threshold_was_defaulted"] is True
+    assert c["threshold_source"] == "model_policy"
+    assert c["calibration_status"] == "uncalibrated"
+    assert c["contrast_reduce"] == "mean"
+    assert c["positive"]["group"] == "positive"
+    assert c["negative"]["group"] == "negative"
+    assert len(c["positive"]["labels"]) == 2
+    assert len(c["negative"]["labels"]) == 1
+    assert c["score_semantics"] == "siglip2_pairwise_sigmoid"
+    assert "best_match" in data
+    assert "scores" in data
+    assert len(data["scores"]) == 3
+
+
+@pytest.mark.anyio
+async def test_classify_contrast_with_user_threshold(client, small_video):
+    r = await client.post(
+        "/api/v1/classify",
+        files={"video": ("test.mp4", small_video.read_bytes(), "video/mp4")},
+        data={
+            "aggregation": "contrast",
+            "positive_labels": json.dumps(["outdoor"]),
+            "negative_labels": json.dumps(["indoor"]),
+            "threshold": "0.30",
+            "contrast_reduce": "top_k_mean",
+        },
+    )
+    assert r.status_code == 200
+    c = r.json()["contrast"]
+    assert c["threshold"] == 0.30
+    assert c["threshold_was_defaulted"] is False
+    assert c["threshold_source"] == "user"
+    assert c["contrast_reduce"] == "top_k_mean"
