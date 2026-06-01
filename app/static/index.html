@@ -607,6 +607,20 @@ input[type="range"] {
     return span;
   }
 
+  // FastAPI's own validation errors (e.g. bad fps, missing video field) return
+  // `detail` as an array of objects, not a string. Flatten it to a readable
+  // message instead of letting it stringify to "[object Object]".
+  function formatErrorDetail(detail) {
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+      return detail.map(function (d) {
+        return (d && d.msg) ? d.msg : JSON.stringify(d);
+      }).join('; ');
+    }
+    if (detail) return JSON.stringify(detail);
+    return '';
+  }
+
   function renderLabelChips(labels, extraClass) {
     labels.forEach(function (lbl) {
       if (selectedLabels.hasOwnProperty(lbl)) return;
@@ -887,7 +901,7 @@ input[type="range"] {
       body: JSON.stringify({ model_id: modelId })
     })
       .then(function (r) {
-        if (!r.ok) return r.json().then(function (e) { throw new Error(e.detail || 'Load failed'); });
+        if (!r.ok) return r.json().then(function (e) { throw new Error(formatErrorDetail(e.detail) || 'Load failed'); });
         return r.json();
       })
       .then(function () {
@@ -980,7 +994,7 @@ input[type="range"] {
 
     fetch('/api/v1/classify', { method: 'POST', body: form })
       .then(function (r) {
-        if (!r.ok) return r.json().then(function (e) { throw new Error(e.detail || 'Classification failed'); });
+        if (!r.ok) return r.json().then(function (e) { throw new Error(formatErrorDetail(e.detail) || 'Classification failed'); });
         return r.json();
       })
       .then(function (data) {
