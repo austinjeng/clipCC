@@ -539,3 +539,43 @@ def test_aggregate_contrast_top_k_mean_sparse_negative():
     result_topk = aggregate_contrast(ctx, pos_count=1, options=opts_topk, policy=SigLip2Policy())
     assert result_topk.contrast.verdict == "negative"
     assert result_topk.contrast.difference < result_mean.contrast.difference
+
+
+def test_aggregate_contrast_difference_follows_reduction_not_group_means():
+    # `difference` must come from the temporal reduction (here: max picks the one
+    # sparse high-margin frame), while `mean_group_score` is always the
+    # across-all-frames mean. With a non-mean reduction the two MUST diverge,
+    # which pins that the reduction mode actually flows into the verdict path
+    # separately from the group summaries.
+    from app.services.scoring import aggregate_contrast
+    confidence = torch.full((10, 2), 0.5)
+    confidence[9, 0] = 0.9  # positive label spikes on a single frame
+    confidence[9, 1] = 0.1
+    frames = [make_frame(i) for i in range(10)]
+    ctx = ScoringContext(
+        confidence=confidence,
+        raw_similarity=confidence.clone(),
+        logits=torch.zeros_like(confidence),
+        semantics="siglip2_pairwise_sigmoid",
+        labels=["safe", "dangerous"],
+        frames=frames,
+    )
+    opts_max = ResolvedContrastOptions(
+        threshold=0.15, threshold_was_defaulted=True,
+        threshold_source="model_policy", calibration_status="uncalibrated",
+        contrast_reduce="max",
+    )
+    result = aggregate_contrast(ctx, pos_count=1, options=opts_max, policy=SigLip2Policy())
+
+    # difference = the sparse frame's signed margin (0.9 - 0.1), via max reduction
+    assert result.contrast.difference == pytest.approx(0.8, abs=1e-6)
+    # group means are over ALL 10 frames: pos=(0.5*9+0.9)/10, neg=(0.5*9+0.1)/10
+    assert result.contrast.positive.mean_group_score == pytest.approx(0.54, abs=1e-6)
+    assert result.contrast.negative.mean_group_score == pytest.approx(0.46, abs=1e-6)
+    # the two are genuinely different: difference (0.8) != group-mean diff (0.08)
+    group_diff = (
+        result.contrast.positive.mean_group_score
+        - result.contrast.negative.mean_group_score
+    )
+    assert abs(result.contrast.difference - group_diff) > 0.5
+    assert result.contrast.verdict == "positive"
