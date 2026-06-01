@@ -12,7 +12,11 @@ LABEL org.opencontainers.image.description="Video classification API using SigLI
 COPY requirements-prod.txt .
 
 ARG TORCH_VARIANT=cpu
-RUN pip install --no-cache-dir torch torchvision --index-url https://download.pytorch.org/whl/${TORCH_VARIANT} \
+# Install torch from the variant index (cpu/cu121). The pin MUST match the torch
+# version in requirements-prod.txt: the variant wheel reports e.g. 2.12.0+cpu,
+# which satisfies `torch==2.12.0`, so the next step treats it as already present
+# and does not overwrite it with the default-PyPI (CUDA) wheel.
+RUN pip install --no-cache-dir torch==2.12.0 --index-url https://download.pytorch.org/whl/${TORCH_VARIANT} \
     && pip install --no-cache-dir -r requirements-prod.txt
 
 COPY app/ app/
