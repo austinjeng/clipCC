@@ -1018,8 +1018,12 @@ input[type="range"] {
       activeChart = null;
     }
 
-    var isTemporal = data.temporal && aggSelect.value === 'temporal';
-    var isContrast = data.contrast && aggSelect.value === 'contrast';
+    // Decide the panel from the response the server actually returned, not the
+    // live dropdown: the user may have switched aggSelect while the request was
+    // in flight, which would otherwise render the wrong panel for this result.
+    var ranAgg = data.metadata && data.metadata.aggregation;
+    var isContrast = !!data.contrast && ranAgg === 'contrast';
+    var isTemporal = !!data.temporal && ranAgg === 'temporal';
 
     temporalResults.style.display = 'none';
     document.getElementById('contrast-results').style.display = 'none';
