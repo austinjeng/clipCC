@@ -8,6 +8,18 @@ import pytest
 from app.config import Settings
 
 
+@pytest.fixture(autouse=True)
+def _ignore_local_dotenv(monkeypatch):
+    """Stop a developer's local .env from leaking into Settings() during tests.
+
+    Settings.model_config pins env_file='.env'. CI has no .env so tests pass,
+    but locally an ambient .env (e.g. CLIPCC_OFFLINE=1, ALLOW_UNAUTHENTICATED=true)
+    overrides fixture defaults and breaks otherwise-green tests. Disable dotenv
+    loading for every test so behavior matches CI.
+    """
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
+
+
 @pytest.fixture
 def temp_dir(tmp_path: Path) -> Path:
     return tmp_path
