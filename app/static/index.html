@@ -992,7 +992,13 @@ input[type="range"] {
     classifyBtn.textContent = 'Classifying';
     classifyBtn.appendChild(createSpinner());
 
-    fetch('/api/v1/classify', { method: 'POST', body: form })
+    // Abort a stuck request instead of spinning forever. The window is well
+    // past the server's own request timeout, so a normal slow inference still
+    // returns (or 504s) first; this only catches a truly hung connection.
+    var controller = new AbortController();
+    var timeoutId = setTimeout(function () { controller.abort(); }, 360000);
+
+    fetch('/api/v1/classify', { method: 'POST', body: form, signal: controller.signal })
       .then(function (r) {
         if (!r.ok) return r.json().then(function (e) { throw new Error(formatErrorDetail(e.detail) || 'Classification failed'); });
         return r.json();
@@ -1001,9 +1007,12 @@ input[type="range"] {
         renderResults(data);
       })
       .catch(function (err) {
-        classifyError.textContent = err.message;
+        classifyError.textContent = (err && err.name === 'AbortError')
+          ? 'Request timed out — the video may be too large or the server is busy. Try again.'
+          : err.message;
       })
       .finally(function () {
+        clearTimeout(timeoutId);
         classifyBtn.disabled = false;
         classifyBtn.textContent = 'Classify';
       });
