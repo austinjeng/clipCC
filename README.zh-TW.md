@@ -450,15 +450,15 @@ ClipCC 包含內建網頁介面，位於 **http://localhost:8000/**。網頁 UI 
 | `best_match.label` | 信心分數最高的標籤 |
 | `best_match.confidence` | 最佳匹配的信心值 |
 | `scores[].label` | 原始標籤文字 |
-| `scores[].confidence` | 信心分數。SigLIP2：獨立 sigmoid（0-1）。CLIP：相對 softmax（加總為 1）。查看 `score_semantics` 以判斷使用哪種方法。 |
+| `scores[].confidence` | 信心分數。SigLIP2：獨立 sigmoid（0-1），分數不會加總為 1。詳見 `score_semantics`。 |
 | `scores[].raw_similarity` | 未縮放的餘弦相似度（影格嵌入與文字嵌入之間） |
 | `scores[].peak_frame_index` | （僅 Max 模式）產生最高分的影格索引（從 0 開始） |
 | `scores[].approx_timestamp_seconds` | （僅 Max 模式）最高分影格的近似時間戳記（`影格索引 / fps`） |
 | `metadata.model` | 用於分類的模型 ID |
 | `metadata.device` | 計算裝置（`cpu` 或 `cuda`） |
 | `metadata.aggregation` | 使用的聚合方式 |
-| `metadata.model_type` | 模型後端類型（`siglip2` 或 `clip`） |
-| `metadata.score_semantics` | 評分方法識別碼（`siglip2_pairwise_sigmoid` 或 `clip_relative_softmax`） |
+| `metadata.model_type` | 模型後端類型（`siglip2`） |
+| `metadata.score_semantics` | 評分方法識別碼（`siglip2_pairwise_sigmoid`） |
 | `metadata.processing_time_seconds` | 推論管線的實際執行時間 |
 | `metadata.disclaimer` | 提醒分數為相對值，非絕對值 |
 | `temporal.timeline` | （僅 Temporal 模式）每個標籤的逐影格分數 |
@@ -466,7 +466,7 @@ ClipCC 包含內建網頁介面，位於 **http://localhost:8000/**。網頁 UI 
 | `temporal.segments[].stats` | 片段統計：`active_avg`、`interval_avg`、`coverage_ratio`、`active_duration` |
 | `temporal.label_summaries` | （僅 Temporal 模式）每個標籤的跨片段彙總統計 |
 | `temporal.best_segment` | （僅 Temporal 模式）峰值信心最高的片段，或 `null` |
-| `temporal.threshold_mode` | （僅 Temporal 模式）`"absolute"`（SigLIP2）或 `"relative"`（CLIP） |
+| `temporal.threshold_mode` | （僅 Temporal 模式）`"absolute"`（SigLIP2） |
 | `temporal.effective_threshold` | （僅 Temporal 模式）實際使用的閾值（明確指定或模型預設） |
 | `temporal.threshold_was_defaulted` | （僅 Temporal 模式）`true` 表示使用了模型的預設閾值 |
 
@@ -720,22 +720,22 @@ python -m pytest tests/ -v
 
 | 測試檔案 | 測試數 | 涵蓋範圍 |
 |---|---|---|
-| `test_api.py` | 13 | 完整整合測試（健康檢查、驗證、分類） |
+| `test_api.py` | 28 | 完整整合測試（健康檢查、驗證、分類、對比） |
 | `test_base_model.py` | 2 | BaseModel 抽象類別契約 |
-| `test_clip_model.py` | 11 | CLIP 模型載入、編碼、分詞 |
-| `test_config.py` | 8 | 設定驗證、身份驗證組態 |
+| `test_config.py` | 14 | 設定驗證、身份驗證組態 |
+| `test_download_script.py` | 7 | 模型下載腳本 |
 | `test_frame_timeline.py` | 9 | 影格間隔、時間戳記、間隔/時長計算 |
-| `test_inference_runner.py` | 3 | 逾時處理、取消機制 |
+| `test_inference_runner.py` | 5 | 逾時處理、取消機制、工作執行緒收尾 |
 | `test_integration.py` | 1 | 端對端整合流程 |
 | `test_middleware.py` | 12 | 身份驗證、上傳閘門、請求大小 |
-| `test_model_manager.py` | 10 | 模型註冊、熱切換、租約並行 |
+| `test_model_manager.py` | 40 | 模型註冊、熱切換、租約並行 |
 | `test_resource_gates.py` | 10 | 並行限制器 |
-| `test_scoring.py` | 21 | Mean/Max/Temporal 聚合、評分上下文 |
-| `test_siglip2_model.py` | 8 | SigLIP2 模型載入、sigmoid 評分 |
+| `test_scoring.py` | 36 | Mean/Max/Temporal/對比聚合、評分上下文 |
+| `test_siglip2_model.py` | 10 | SigLIP2 模型載入、sigmoid 評分 |
 | `test_temp_store.py` | 5 | 檔案上傳、清理、定時清除 |
-| `test_temporal_policy.py` | 8 | 評分策略、閾值模式 |
-| `test_video.py` | 9 | ffprobe 驗證、影格擷取 |
-| **總計** | **130** | |
+| `test_temporal_policy.py` | 6 | 評分策略、閾值模式 |
+| `test_video.py` | 10 | ffprobe 驗證、影格擷取 |
+| **總計** | **195** | |
 
 ---
 
@@ -757,15 +757,13 @@ clipCC/
 │   ├── inference_runner.py     # 執行緒化管線執行器，支援協作式逾時
 │   ├── models/
 │   │   ├── base_model.py       # 所有模型後端的抽象基礎類別
-│   │   ├── clip_model.py       # OpenCLIP 模型（softmax 評分）
 │   │   ├── siglip2_model.py    # SigLIP2 模型，使用 HuggingFace transformers（sigmoid 評分）
-│   │   ├── model_manager.py    # 模型註冊表、熱切換與租約式並行控制
-│   │   └── model_spec.py       # 舊版模型元資料
+│   │   └── model_manager.py    # 模型註冊表、熱切換與租約式並行控制
 │   ├── services/
 │   │   ├── video.py            # ffprobe 驗證與 ffmpeg 影格擷取
-│   │   ├── scoring.py          # Mean/Max/Temporal 聚合
+│   │   ├── scoring.py          # Mean/Max/Temporal/對比聚合
 │   │   ├── frame_timeline.py   # 時序模式的影格間隔計算
-│   │   └── temporal_policy.py  # 評分策略（sigmoid vs softmax 閾值行為）
+│   │   └── temporal_policy.py  # SigLIP2 評分策略（閾值行為）
 │   ├── schemas/
 │   │   └── response.py         # Pydantic 回應模型
 │   ├── errors/
@@ -830,7 +828,7 @@ clipCC/
 
 - **隨需載入模型：** 模型首次使用時從 HuggingFace 下載，並快取於本機（Docker 磁碟區或本機目錄）。`ModelManager` 透過租約式並行控制協調熱切換 — 進行中的請求會在當前模型上完成，再載入新模型。
 
-- **評分語意：** SigLIP2 模型使用成對 sigmoid 評分（每標籤獨立，分數介於 0-1）。CLIP 模型使用 logit 縮放的餘弦相似度加 softmax（相對分數加總為 1）。回應中的 `score_semantics` 欄位標示使用的方法，時序聚合管線會自動選擇適當的閾值策略。
+- **評分語意：** SigLIP2 模型使用成對 sigmoid 評分（每標籤獨立，分數介於 0-1，且不會加總為 1）。回應中的 `score_semantics` 欄位標示使用的方法，時序聚合管線會選擇對應的閾值策略。
 
 ---
 
@@ -845,7 +843,7 @@ clipCC/
 答：取決於影片長度、fps 和硬體。5 分鐘影片以 1fps 取樣 = 300 影格。在 CPU 上預計 1-5 分鐘，在 GPU 上預計 10-30 秒。回應中的 `processing_time_seconds` 欄位會告訴你確切的處理時間。
 
 **問：「信心分數（confidence）」是什麼意思？**
-答：使用 SigLIP2（預設）時，信心分數是 **sigmoid** 分數，介於 0 到 1 之間 — 0.8 表示模型有 80% 的信心認為該標籤適用，與其他標籤無關。分數**不會**加總為 1。使用 CLIP 模型時，信心分數是 **softmax** 分數 — 相對於其他標籤，加總為 1。查看回應中的 `score_semantics` 欄位以判斷使用了哪種評分方法。
+答：信心分數是 **sigmoid** 分數，介於 0 到 1 之間 — 0.8 表示模型有 80% 的信心認為該標籤適用，與其他標籤無關。分數**不會**加總為 1。回應中的 `score_semantics` 欄位標示評分方法（`siglip2_pairwise_sigmoid`）。
 
 **問：`raw_similarity` 是什麼意思？**
 答：影片影格嵌入與文字標籤嵌入之間未經縮放的餘弦相似度，在模型特定的評分轉換之前的原始值。適合需要自行進行分數處理的進階使用者。

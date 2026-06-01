@@ -891,15 +891,15 @@ Better prompt templates can improve classification accuracy. The template must c
 | `best_match.label` | The label with the highest confidence score |
 | `best_match.confidence` | The confidence value of the best match |
 | `scores[].label` | The original label text |
-| `scores[].confidence` | Confidence score. SigLIP2: independent sigmoid (0-1). CLIP: relative softmax (sum to 1). Check `score_semantics` for which method was used. |
+| `scores[].confidence` | Confidence score. SigLIP2: independent sigmoid (0-1), scores do not sum to 1. See `score_semantics`. |
 | `scores[].raw_similarity` | Unscaled cosine similarity between frame and text embeddings |
 | `scores[].peak_frame_index` | (Max mode only) 0-based index of the frame that produced the peak score |
 | `scores[].approx_timestamp_seconds` | (Max mode only) Approximate timestamp of the peak frame (`frame_index / fps`) |
 | `metadata.model` | Model ID used for classification |
 | `metadata.device` | Compute device (`cpu` or `cuda`) |
 | `metadata.aggregation` | Aggregation method used |
-| `metadata.model_type` | Model backend type (`siglip2` or `clip`) |
-| `metadata.score_semantics` | Scoring method identifier (`siglip2_pairwise_sigmoid` or `clip_relative_softmax`) |
+| `metadata.model_type` | Model backend type (`siglip2`) |
+| `metadata.score_semantics` | Scoring method identifier (`siglip2_pairwise_sigmoid`) |
 | `metadata.processing_time_seconds` | Wall-clock time for the inference pipeline |
 | `metadata.disclaimer` | Reminder that scores are relative, not absolute |
 | `temporal.timeline` | (Temporal only) Frame-by-frame scores for each label |
@@ -907,7 +907,7 @@ Better prompt templates can improve classification accuracy. The template must c
 | `temporal.segments[].stats` | Segment statistics: `active_avg`, `interval_avg`, `coverage_ratio`, `active_duration` |
 | `temporal.label_summaries` | (Temporal only) Per-label aggregate statistics across all segments |
 | `temporal.best_segment` | (Temporal only) The segment with the highest peak confidence, or `null` |
-| `temporal.threshold_mode` | (Temporal only) `"absolute"` (SigLIP2) or `"relative"` (CLIP) |
+| `temporal.threshold_mode` | (Temporal only) `"absolute"` (SigLIP2) |
 | `temporal.effective_threshold` | (Temporal only) The threshold value used (explicit or model default) |
 | `temporal.threshold_was_defaulted` | (Temporal only) `true` if the model's default threshold was used |
 
@@ -1204,22 +1204,22 @@ python -m pytest tests/ -v
 
 | Test File | Tests | What It Covers |
 |---|---|---|
-| `test_api.py` | 13 | Full integration (health, validation, classify) |
+| `test_api.py` | 28 | Full integration (health, validation, classify, contrast) |
 | `test_base_model.py` | 2 | BaseModel abstraction contract |
-| `test_clip_model.py` | 11 | CLIP model loading, encoding, tokenization |
-| `test_config.py` | 8 | Settings validation, auth config |
+| `test_config.py` | 14 | Settings validation, auth config |
+| `test_download_script.py` | 7 | Model download script |
 | `test_frame_timeline.py` | 9 | Frame intervals, timestamps, gap/duration math |
-| `test_inference_runner.py` | 3 | Timeout, cancellation |
+| `test_inference_runner.py` | 5 | Timeout, cancellation, worker teardown |
 | `test_integration.py` | 1 | End-to-end integration flow |
 | `test_middleware.py` | 12 | Auth, upload gates, body size |
-| `test_model_manager.py` | 10 | Model registry, hot-swap, lease concurrency |
+| `test_model_manager.py` | 40 | Model registry, hot-swap, lease concurrency |
 | `test_resource_gates.py` | 10 | Concurrency limiters |
-| `test_scoring.py` | 21 | Mean/max/temporal aggregation, scoring context |
-| `test_siglip2_model.py` | 8 | SigLIP2 model loading, sigmoid scoring |
+| `test_scoring.py` | 36 | Mean/max/temporal/contrast aggregation, scoring context |
+| `test_siglip2_model.py` | 10 | SigLIP2 model loading, sigmoid scoring |
 | `test_temp_store.py` | 5 | File upload, cleanup, janitor |
-| `test_temporal_policy.py` | 8 | Scoring policies, threshold modes |
-| `test_video.py` | 9 | ffprobe, validation, frame extraction |
-| **Total** | **130** | |
+| `test_temporal_policy.py` | 6 | Scoring policy, threshold mode |
+| `test_video.py` | 10 | ffprobe, validation, frame extraction |
+| **Total** | **195** | |
 
 ---
 
@@ -1241,15 +1241,13 @@ clipCC/
 │   ├── inference_runner.py     # Threaded pipeline runner with cooperative timeout
 │   ├── models/
 │   │   ├── base_model.py       # Abstract base class for all model backends
-│   │   ├── clip_model.py       # OpenCLIP model (softmax scoring)
 │   │   ├── siglip2_model.py    # SigLIP2 model via HuggingFace transformers (sigmoid scoring)
-│   │   ├── model_manager.py    # Model registry, hot-swap with lease-based concurrency
-│   │   └── model_spec.py       # Legacy model metadata
+│   │   └── model_manager.py    # Model registry, hot-swap with lease-based concurrency
 │   ├── services/
 │   │   ├── video.py            # ffprobe validation and ffmpeg frame extraction
-│   │   ├── scoring.py          # Mean/max/temporal aggregation over frame scores
+│   │   ├── scoring.py          # Mean/max/temporal/contrast aggregation over frame scores
 │   │   ├── frame_timeline.py   # Frame interval math for temporal mode
-│   │   └── temporal_policy.py  # Scoring policies (sigmoid vs softmax threshold behavior)
+│   │   └── temporal_policy.py  # SigLIP2 scoring policy (threshold behavior)
 │   ├── schemas/
 │   │   └── response.py         # Pydantic response models
 │   ├── errors/
@@ -1314,7 +1312,7 @@ Client uploads video + labels
 
 - **On-demand model loading:** Models are downloaded from HuggingFace on first use and cached locally (Docker volume or local directory). The `ModelManager` coordinates hot-swap with lease-based concurrency — in-flight requests complete on the current model before a new model is loaded.
 
-- **Scoring semantics:** SigLIP2 models use pairwise sigmoid scoring (independent per-label, scores between 0 and 1). CLIP models use logit-scaled cosine similarity with softmax (relative scores summing to 1). The `score_semantics` field in the response identifies which method was used, and the temporal aggregation pipeline automatically selects the appropriate threshold policy.
+- **Scoring semantics:** SigLIP2 models use pairwise sigmoid scoring (independent per-label, scores between 0 and 1, which do not sum to 1). The `score_semantics` field in the response identifies the method used, and the temporal aggregation pipeline selects the matching threshold policy.
 
 ---
 
@@ -1329,7 +1327,7 @@ A: `.mp4`, `.avi`, `.mov`, and `.mkv`. The video must have a single video stream
 A: Depends on video length, fps, and hardware. A 5-minute video at 1fps = 300 frames. On CPU, expect 1-5 minutes. On GPU, expect 10-30 seconds. The `processing_time_seconds` field in the response tells you the exact time.
 
 **Q: What does "confidence" mean?**
-A: With SigLIP2 (default), confidence is a **sigmoid** score between 0 and 1 — a score of 0.8 means the model is 80% confident that label applies, independent of other labels. Scores do **not** sum to 1. With CLIP models, confidence is a **softmax** score — relative to the other labels, summing to 1. Check the `score_semantics` field in the response to know which scoring method was used.
+A: Confidence is a **sigmoid** score between 0 and 1 — a score of 0.8 means the model is 80% confident that label applies, independent of other labels. Scores do **not** sum to 1. The `score_semantics` field in the response identifies the scoring method (`siglip2_pairwise_sigmoid`).
 
 **Q: What does `raw_similarity` mean?**
 A: The unscaled cosine similarity between the video frame embedding and the text label embedding, before any model-specific scoring transformation. Useful for advanced users who want to do their own scoring.
