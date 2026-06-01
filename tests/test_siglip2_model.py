@@ -58,10 +58,14 @@ class TestSigLip2ModelInterface:
         counts = model.validate_prompts([long_prompt])
         assert counts[0] > 64
 
-    def test_tokenize_raw_lowercases(self, model):
+    def test_tokenize_raw_preserves_case(self, model):
+        # tokenize_raw must match score_batch's tokenization, which is
+        # case-sensitive. Distinct casing => distinct tokens, so the duplicate
+        # detector does not collapse "A Cat" and "a cat" (the model scores them
+        # differently).
         upper = model.tokenize_raw(["A Cat"])
         lower = model.tokenize_raw(["a cat"])
-        assert torch.equal(upper[0], lower[0])
+        assert not torch.equal(upper[0], lower[0])
 
     def test_tokenize_for_inference_shape(self, model):
         result = model.tokenize_for_inference(["a cat", "a dog"])

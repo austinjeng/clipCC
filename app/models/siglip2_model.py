@@ -80,10 +80,14 @@ class SigLip2Model(BaseModel):
         )
 
     def validate_prompts(self, prompts: list[str]) -> list[int]:
+        # Tokenize the original-case text so the token-count check matches what
+        # score_batch/tokenize_for_inference actually feed the model. The Gemma
+        # tokenizer is case-sensitive; lowercasing here would validate a
+        # different token sequence than inference uses.
         counts = []
         for prompt in prompts:
             tokens = self.processor.tokenizer(
-                prompt.lower(), truncation=False, padding=False
+                prompt, truncation=False, padding=False
             )
             counts.append(len(tokens["input_ids"]))
         return counts
@@ -98,10 +102,13 @@ class SigLip2Model(BaseModel):
         )
 
     def tokenize_raw(self, prompts: list[str]) -> list[torch.Tensor]:
+        # Original case: duplicate-label detection must match inference, which
+        # is case-sensitive. Lowercasing here would wrongly flag e.g. "Car" and
+        # "car" as identical even though the model scores them differently.
         result = []
         for prompt in prompts:
             tokens = self.processor.tokenizer(
-                prompt.lower(), truncation=False, padding=False, return_tensors="pt"
+                prompt, truncation=False, padding=False, return_tensors="pt"
             )
             result.append(tokens["input_ids"][0])
         return result
