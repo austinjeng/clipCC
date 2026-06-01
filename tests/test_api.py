@@ -183,6 +183,40 @@ async def test_classify_max(client, small_video):
         assert "approx_timestamp_seconds" in score
 
 
+@pytest.mark.anyio
+async def test_classify_zero_frames_returns_422(client, small_video):
+    """A video that extracts zero frames must yield a typed 422, not a 500."""
+    from app.services.video import FrameExtractor
+
+    with patch.object(FrameExtractor, "extract", return_value=[]):
+        r = await client.post(
+            "/api/v1/classify",
+            files={"video": ("test.mp4", small_video.read_bytes(), "video/mp4")},
+            data={"labels": json.dumps(["outdoor scene", "vehicle"])},
+        )
+    assert r.status_code == 422
+    assert "frame" in r.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_classify_contrast_zero_frames_returns_422(client, small_video):
+    """Zero-frame contrast must hit the guard before get_policy('') crashes."""
+    from app.services.video import FrameExtractor
+
+    with patch.object(FrameExtractor, "extract", return_value=[]):
+        r = await client.post(
+            "/api/v1/classify",
+            files={"video": ("test.mp4", small_video.read_bytes(), "video/mp4")},
+            data={
+                "aggregation": "contrast",
+                "positive_labels": json.dumps(["focused"]),
+                "negative_labels": json.dumps(["distracted"]),
+            },
+        )
+    assert r.status_code == 422
+    assert "frame" in r.json()["detail"].lower()
+
+
 # ── Model endpoints ───────────────────────────────────────────────
 
 

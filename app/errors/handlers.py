@@ -91,6 +91,17 @@ class UnsupportedFormatError(HTTPException):
         )
 
 
+class NoFramesExtractedError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=422,
+            detail=(
+                "No frames could be extracted from the video. The clip may be "
+                "too short for the requested fps, empty, or corrupt."
+            ),
+        )
+
+
 class TokenTruncationError(HTTPException):
     def __init__(self, prompt: str, token_count: int) -> None:
         super().__init__(

@@ -6,9 +6,11 @@ import logging
 import time
 import uuid
 from contextlib import asynccontextmanager
+from functools import partial
 from pathlib import Path
 from typing import Optional
 
+import anyio
 import torch
 from fastapi import FastAPI, Form, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -26,6 +28,7 @@ from app.errors.handlers import (
     InvalidLabelsError,
     InvalidPromptTemplateError,
     InvalidTemporalParamsError,
+    NoFramesExtractedError,
     TokenTruncationError,
     UnsupportedFormatError,
 )
@@ -388,9 +391,17 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
                 start_time = time.monotonic()
 
                 try:
-                    stored = temp_store.save_upload(request_id, video.file)
+                    stored = await anyio.to_thread.run_sync(
+                        temp_store.save_upload, request_id, video.file
+                    )
 
-                    video_info = probe_video(stored.path, timeout=settings.ffmpeg_timeout_seconds)
+                    video_info = await anyio.to_thread.run_sync(
+                        partial(
+                            probe_video,
+                            stored.path,
+                            timeout=settings.ffmpeg_timeout_seconds,
+                        )
+                    )
                     validate_video_constraints(video_info, settings, fps)
 
                     temporal_opts = None
@@ -438,6 +449,9 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
                             raise InferenceTimeoutError(settings.request_timeout_seconds)
 
                         all_batches, all_frames = result
+
+                        if not all_frames:
+                            raise NoFramesExtractedError()
 
                         contrast_opts = None
                         if aggregation == "contrast":
