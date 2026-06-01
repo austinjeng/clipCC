@@ -217,6 +217,29 @@ async def test_classify_contrast_zero_frames_returns_422(client, small_video):
     assert "frame" in r.json()["detail"].lower()
 
 
+@pytest.mark.anyio
+async def test_janitor_is_periodic_and_stops_on_shutdown(test_settings, monkeypatch):
+    monkeypatch.setattr("app.main.JANITOR_INTERVAL_SECONDS", 0.02)
+    calls = {"n": 0}
+
+    def counting(self, *args, **kwargs):
+        calls["n"] += 1
+
+    monkeypatch.setattr("app.temp_store.TempStore.run_janitor", counting)
+
+    with patch("app.models.model_manager.SigLip2Model", side_effect=_make_mock_siglip2):
+        app = create_app(test_settings)
+        inner_app = app._app
+        async with inner_app.router.lifespan_context(inner_app):
+            await asyncio.sleep(0.1)  # allow several janitor ticks
+            n_during = calls["n"]
+        await asyncio.sleep(0.1)  # after graceful shutdown
+        n_after = calls["n"]
+
+    assert n_during >= 2          # periodic while running (M8) + retained ref (M10)
+    assert n_after == n_during    # loop cancelled on shutdown (M11)
+
+
 # ── Model endpoints ───────────────────────────────────────────────
 
 

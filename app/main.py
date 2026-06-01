@@ -61,6 +61,8 @@ logger = logging.getLogger(__name__)
 
 SUPPORTED_EXTENSIONS = {".mp4", ".avi", ".mov", ".mkv"}
 
+JANITOR_INTERVAL_SECONDS = 600
+
 DISCLAIMER_MEAN = (
     "Scores are relative to the supplied labels, not calibrated probabilities. "
     "Not suitable for safety-critical decisions."
@@ -143,10 +145,38 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
             except Exception as e:
                 logger.error(f"Failed to auto-load model: {e}")
 
-        if not settings.skip_model_autoload:
-            asyncio.create_task(_auto_load())
+        async def _janitor_loop():
+            # Periodic cleanup of orphaned temp dirs (e.g. from a hard crash).
+            # Offloaded so the filesystem walk never blocks the event loop.
+            while True:
+                await asyncio.sleep(JANITOR_INTERVAL_SECONDS)
+                try:
+                    await anyio.to_thread.run_sync(temp_store.run_janitor)
+                except Exception as e:
+                    logger.warning(f"Janitor sweep failed: {e}")
 
-        yield
+        # Retain references: asyncio holds only a weak ref to tasks, so an
+        # unreferenced task can be garbage-collected mid-run.
+        background_tasks: list[asyncio.Task] = []
+        if not settings.skip_model_autoload:
+            background_tasks.append(asyncio.create_task(_auto_load()))
+        background_tasks.append(asyncio.create_task(_janitor_loop()))
+        state["background_tasks"] = background_tasks
+
+        try:
+            yield
+        finally:
+            # Graceful shutdown: cancel and drain the background tasks instead
+            # of abandoning them when the event loop tears down.
+            for task in background_tasks:
+                task.cancel()
+            for task in background_tasks:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    logger.warning(f"Background task error during shutdown: {e}")
 
     app = FastAPI(lifespan=lifespan)
 
