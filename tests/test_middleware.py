@@ -59,6 +59,19 @@ async def test_no_auth_when_key_not_configured():
         r = await c.post("/api/v1/classify", content=b"data")
         assert r.status_code == 200
 
+def test_check_auth_valid_key_accepted():
+    app = make_test_app(api_key="secret")
+    assert app._check_auth({"headers": [(b"x-api-key", b"secret")]}) is True
+
+def test_check_auth_wrong_key_rejected():
+    app = make_test_app(api_key="secret")
+    assert app._check_auth({"headers": [(b"x-api-key", b"wrong")]}) is False
+
+def test_check_auth_non_utf8_key_rejected():
+    # A non-UTF-8 header value must yield a clean reject, not a 500 from decode.
+    app = make_test_app(api_key="secret")
+    assert app._check_auth({"headers": [(b"x-api-key", b"\xff\xfe")]}) is False
+
 @pytest.mark.anyio
 async def test_body_size_rejection():
     app = make_test_app(max_body=100)

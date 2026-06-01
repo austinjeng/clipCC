@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 from typing import Callable
 
@@ -64,10 +65,14 @@ class RequestGateMiddleware:
         """Return True if auth passes (key not configured or key matches)."""
         if self._api_key is None:
             return True
+        expected = self._api_key.encode()
         headers: list[tuple[bytes, bytes]] = scope.get("headers", [])
         for name, value in headers:
             if name.lower() == b"x-api-key":
-                return value.decode() == self._api_key
+                # Compare raw bytes with a constant-time check: timing-safe, and
+                # a non-UTF-8 header value simply fails to match (no 500 from a
+                # decode error).
+                return hmac.compare_digest(value, expected)
         return False
 
     async def __call__(self, scope: dict, receive: Callable, send: Callable) -> None:
