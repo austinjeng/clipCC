@@ -421,6 +421,22 @@ async def test_contrast_invalid_reduce_mode(client, small_video):
 
 
 @pytest.mark.anyio
+async def test_contrast_rejects_temporal_only_params(client, small_video):
+    r = await client.post(
+        "/api/v1/classify",
+        files={"video": ("test.mp4", small_video.read_bytes(), "video/mp4")},
+        data={
+            "aggregation": "contrast",
+            "positive_labels": json.dumps(["safe"]),
+            "negative_labels": json.dumps(["dangerous"]),
+            "gap_tolerance": "2.0",
+        },
+    )
+    assert r.status_code == 422
+    assert "gap_tolerance" in r.json()["detail"]
+
+
+@pytest.mark.anyio
 async def test_contrast_cross_group_duplicate_rejected(client, small_video):
     r = await client.post(
         "/api/v1/classify",

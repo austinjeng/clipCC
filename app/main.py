@@ -349,6 +349,10 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
                     f"Invalid contrast_reduce '{contrast_reduce}'. "
                     f"Valid: {', '.join(sorted(VALID_CONTRAST_REDUCTIONS))}."
                 )
+            if gap_tolerance is not None or min_duration is not None:
+                raise InvalidContrastParamsError(
+                    "'gap_tolerance' and 'min_duration' are only valid with aggregation='temporal'."
+                )
         else:
             if positive_labels is not None or negative_labels is not None:
                 raise InvalidContrastParamsError(
