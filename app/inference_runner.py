@@ -55,10 +55,15 @@ class InferenceRunner:
             self.timed_out = True
             self.cancel_event.set()
             self._kill_active_process()
-            thread.join(timeout=self.timeout_seconds)
+            # Wait for the worker to actually unwind before returning, without
+            # blocking the event loop (the old thread.join did block it). The
+            # caller releases its model lease once we return, so returning while
+            # the worker still runs would risk a model swap racing a live
+            # inference (use-after-swap). ffmpeg is killed above; the only
+            # remaining wait is an in-flight, uninterruptible torch forward
+            # pass, bounded by one batch's compute.
+            await done.wait()
             return None
-
-        thread.join(timeout=5)
 
         if "value" in error_holder:
             raise error_holder["value"]

@@ -1,3 +1,4 @@
+import subprocess
 import threading
 import pytest
 from app.services.video import (
@@ -69,3 +70,31 @@ class TestFrameExtractor:
                 video_path=small_video, fps=1.0, max_frames=30,
                 frame_dir=frame_dir, cancel_event=cancel,
             )
+
+    def test_extract_registers_process_with_runner(self, small_video, temp_dir):
+        """extract() must register its ffmpeg Popen with the runner so a request
+        timeout can kill it, and unregister it when done."""
+
+        class _FakeRunner:
+            def __init__(self):
+                self.registered = []
+                self.unregister_count = 0
+
+            def register_process(self, proc):
+                self.registered.append(proc)
+
+            def unregister_process(self):
+                self.unregister_count += 1
+
+        extractor = FrameExtractor(ffmpeg_timeout=30)
+        frame_dir = temp_dir / "frames"
+        frame_dir.mkdir()
+        cancel = threading.Event()
+        runner = _FakeRunner()
+        extractor.extract(
+            video_path=small_video, fps=1.0, max_frames=30,
+            frame_dir=frame_dir, cancel_event=cancel, runner=runner,
+        )
+        assert len(runner.registered) == 1
+        assert isinstance(runner.registered[0], subprocess.Popen)
+        assert runner.unregister_count == 1

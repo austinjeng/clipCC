@@ -4,7 +4,10 @@ import subprocess
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from app.inference_runner import InferenceRunner
 
 from app.config import Settings
 from app.errors.handlers import (
@@ -98,6 +101,7 @@ class FrameExtractor:
         max_frames: int,
         frame_dir: Path,
         cancel_event: threading.Event,
+        runner: "Optional[InferenceRunner]" = None,
     ) -> list[FrameSample]:
         if cancel_event.is_set():
             raise RuntimeError("Extraction cancelled before start")
@@ -119,6 +123,10 @@ class FrameExtractor:
         try:
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             self.active_process = proc
+            # Register with the runner so a request timeout can kill ffmpeg
+            # instead of letting it run to its own ffmpeg_timeout deadline.
+            if runner is not None:
+                runner.register_process(proc)
             _, stderr = proc.communicate(timeout=self.ffmpeg_timeout)
         except subprocess.TimeoutExpired:
             proc.kill()
@@ -126,6 +134,8 @@ class FrameExtractor:
             raise RuntimeError(f"ffmpeg timed out after {self.ffmpeg_timeout}s")
         finally:
             self.active_process = None
+            if runner is not None:
+                runner.unregister_process()
 
         if cancel_event.is_set():
             raise RuntimeError("Extraction cancelled")

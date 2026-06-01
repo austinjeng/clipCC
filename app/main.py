@@ -420,6 +420,7 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
                                 max_frames=settings.max_frames,
                                 frame_dir=frame_dir,
                                 cancel_event=cancel_event,
+                                runner=runner_ref,
                             )
 
                             all_batches = []
