@@ -223,8 +223,6 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
         semantics_str = ""
         if model.model_type == "siglip2":
             semantics_str = ScoreSemantics.SIGLIP2_SIGMOID
-        elif model.model_type == "clip":
-            semantics_str = ScoreSemantics.CLIP_RELATIVE_SOFTMAX
 
         temporal_defaults = None
         if semantics_str:

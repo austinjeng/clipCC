@@ -291,19 +291,10 @@ def aggregate_contrast(
         ContrastResult,
     )
 
-    neg_count = len(ctx.labels) - pos_count
     pooling = policy.contrast_label_pooling()
 
-    if pooling == "logsumexp_normalized":
-        pos_evidence = torch.logsumexp(ctx.logits[:, :pos_count], dim=1) - math.log(pos_count)
-        neg_evidence = torch.logsumexp(ctx.logits[:, pos_count:], dim=1) - math.log(neg_count)
-        stacked = torch.stack([pos_evidence, neg_evidence], dim=1)
-        probs = torch.softmax(stacked, dim=1)
-        frame_pos = probs[:, 0]
-        frame_neg = probs[:, 1]
-    else:
-        frame_pos = ctx.confidence[:, :pos_count].mean(dim=1)
-        frame_neg = ctx.confidence[:, pos_count:].mean(dim=1)
+    frame_pos = ctx.confidence[:, :pos_count].mean(dim=1)
+    frame_neg = ctx.confidence[:, pos_count:].mean(dim=1)
 
     frame_margins = frame_pos - frame_neg
     video_margin = contrast_reduce(frame_margins, options.contrast_reduce)

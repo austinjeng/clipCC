@@ -58,7 +58,7 @@ def test_scoring_context_mixed_semantics_raises():
         confidence=torch.tensor([[0.3]]),
         raw_similarity=torch.tensor([[0.2]]),
         logits=torch.tensor([[-0.5]]),
-        semantics="clip_relative_softmax",
+        semantics="other_model_semantics",
     )
     with pytest.raises(ValueError, match="Mixed model semantics"):
         ScoringContext.from_batches([batch1, batch2], ["a"], [make_frame(0), make_frame(1)])
@@ -116,7 +116,7 @@ def test_aggregate_frame_scores_mean():
         confidence=torch.tensor([[0.8, 0.1, 0.1], [0.6, 0.2, 0.2]]),
         raw_similarity=torch.tensor([[0.5, 0.3, 0.2], [0.4, 0.3, 0.3]]),
         logits=torch.tensor([[2.0, -1.0, -1.0], [1.0, -0.5, -0.5]]),
-        semantics="clip_relative_softmax",
+        semantics="siglip2_pairwise_sigmoid",
     )
     frames = [make_frame(0), make_frame(1)]
     labels = ["cat", "dog", "bird"]
@@ -509,35 +509,6 @@ def test_aggregate_contrast_uncertain_verdict():
     assert result.contrast.verdict == "uncertain"
     assert abs(result.contrast.difference) <= 0.15
     assert result.contrast.dominant_label is None
-
-
-def test_aggregate_contrast_clip_group_size_imbalance():
-    from app.services.scoring import aggregate_contrast
-    from app.services.temporal_policy import SoftmaxPolicy
-    n_pos, n_neg = 50, 1
-    n_labels = n_pos + n_neg
-    logits = torch.zeros(3, n_labels)
-    confidence = torch.softmax(logits, dim=-1)
-    frames = [make_frame(i) for i in range(3)]
-    ctx = ScoringContext(
-        confidence=confidence,
-        raw_similarity=confidence.clone(),
-        logits=logits,
-        semantics="clip_relative_softmax",
-        labels=[f"pos_{i}" for i in range(n_pos)] + [f"neg_{i}" for i in range(n_neg)],
-        frames=frames,
-    )
-    opts = ResolvedContrastOptions(
-        threshold=0.10,
-        threshold_was_defaulted=True,
-        threshold_source="model_policy",
-        calibration_status="uncalibrated",
-        contrast_reduce="mean",
-    )
-    result = aggregate_contrast(ctx, pos_count=n_pos, options=opts, policy=SoftmaxPolicy())
-    assert result.contrast.verdict == "uncertain"
-    assert abs(result.contrast.difference) < 0.10
-    assert result.contrast.label_pooling == "logsumexp_normalized"
 
 
 def test_aggregate_contrast_top_k_mean_sparse_negative():
