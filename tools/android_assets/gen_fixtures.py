@@ -29,7 +29,7 @@ def gen_all(hf_repo: str, frames_dir: Path, labels: list[str], out_dir: Path) ->
         tok_rows.append({"text": text, "input_ids": ids})
     (out_dir / "tokenizer_golden.json").write_text(json.dumps(tok_rows, indent=2))
 
-    # --- lossless frames: PNG -> AutoProcessor image path (bicubic square, normalize) ---
+    # --- lossless frames: PNG -> AutoProcessor image path (bilinear square, normalize) ---
     frame_paths = sorted(frames_dir.glob("*.png"))
     images = [Image.open(p).convert("RGB") for p in frame_paths]
     pixel_values = proc(images=images, return_tensors="np")["pixel_values"]  # [F,3,R,R]
@@ -51,12 +51,15 @@ def gen_all(hf_repo: str, frames_dir: Path, labels: list[str], out_dir: Path) ->
         "cosine": cosine.tolist(),
     }, indent=2))
 
-    # --- exact resample/normalize contract for the Android bicubic target (M16) ---
+    # --- exact resample/normalize contract for the Android resampler target (M16) ---
+    # SigLIP2 uses resample=2 (PIL BILINEAR) for all 4 profile models — Android's
+    # Bitmap.createScaledBitmap(filter=true) is bilinear, so this is reproducible without a
+    # custom bicubic kernel. resample_contract.json is the authoritative per-model value.
     ip = proc.image_processor
     contract = {
         "do_resize": getattr(ip, "do_resize", True),
         "size": dict(getattr(ip, "size", {})),
-        "resample": getattr(ip, "resample", 3),  # PIL.Image.BICUBIC == 3
+        "resample": getattr(ip, "resample", 2),  # PIL.Image.BILINEAR == 2 (SigLIP2 default)
         "antialias": getattr(ip, "antialias", None),
         "do_rescale": getattr(ip, "do_rescale", True),
         "rescale_factor": getattr(ip, "rescale_factor", 1 / 255),

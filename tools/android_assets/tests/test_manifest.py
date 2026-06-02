@@ -31,7 +31,7 @@ def test_round_trip_preserves_fields_and_schema_version():
     assert parsed["schema_version"] == SCHEMA_VERSION == 1
     assert parsed["profile"] == "benchmark-v1"
     assert parsed["score_semantics"] == "siglip2_pairwise_sigmoid"
-    assert parsed["preprocess"]["resample"] == "bicubic"
+    assert parsed["preprocess"]["resample"] == "bilinear"
     assert parsed["frame_pipeline"]["prescale"] == "none"
     assert parsed["tokenizer"]["lowercase_applied_by"] == "unknown"
     assert parsed["tokenizer"]["padding_side"] == "right"

@@ -35,8 +35,9 @@ def test_gen_all_produces_consistent_fixtures(tmp_path):
         for v in row:
             assert -1.0001 <= v <= 1.0001
 
-    # exact resample contract captured for the Android bicubic target (M16)
+    # exact resample contract captured for the Android resampler target (M16).
+    # SigLIP2 preprocessor_config specifies resample=2 (PIL BILINEAR) for all 4 profile models.
     rs = json.loads((tmp_path / "resample_contract.json").read_text())
-    assert rs["resample"] in ("bicubic", 3, "bilinear", 2)  # slow processor returns 2 (BILINEAR)
+    assert rs["resample"] in (2, "bilinear"), f"expected BILINEAR, got {rs['resample']!r}"
     assert rs["size"]["height"] == res and rs["size"]["width"] == res
     assert rs["image_mean"] == [0.5, 0.5, 0.5] and rs["image_std"] == [0.5, 0.5, 0.5]

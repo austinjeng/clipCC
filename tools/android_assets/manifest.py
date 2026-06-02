@@ -73,7 +73,7 @@ class ModelBundleManifest:
             },
             "preprocess": {
                 "resize": "stretch_square",
-                "resample": "bicubic",
+                "resample": "bilinear",  # SigLIP2 preprocessor_config resample=2 (BILINEAR), all 4 models
                 "rescale": 0.00392156862745098,
                 "mean": [0.5, 0.5, 0.5],
                 "std": [0.5, 0.5, 0.5],
@@ -84,7 +84,7 @@ class ModelBundleManifest:
                 "max_frames": 300,
                 "prescale": "none",
                 "intermediate_codec": "none",
-                "resample": "bicubic",
+                "resample": "bilinear",
             },
         }
         return json.dumps(doc, indent=2)
