@@ -93,9 +93,13 @@ latest stable 1.26.0 as of 2026-05) running **prebuilt SigLIP2 ONNX towers** on 
   realistic fastest *reliable* path for a transformer anyway.
 
 **Backends on Tensor G2 — one benchmark lane + two experimental attempts (the honest truth):**
+> **VERIFIED on-device (Spike 0b, Pixel 7a / Android 16):** XNNPACK delegates only **~12%** of
+> the base-256 vision nodes (rest on the ORT CPU EP); **NNAPI delegates 0%** (full CPU fallback).
+> Per-node `provider` coverage is readable from ORT's profiling JSON → `BackendCapabilityReport`
+> is implementable. See `phase0-spike-results.md`.
 - **CPU (XNNPACK) — the benchmark lane.** Real, reliable, fp32-parity-safe. Even here,
-  XNNPACK only accelerates *supported* nodes; unsupported nodes fall back to the ORT CPU EP.
-  The report must therefore state node coverage, not just "XNNPACK".
+  XNNPACK only accelerates *supported* nodes (~12% measured); unsupported nodes fall back to the
+  ORT CPU EP. The report must therefore state node coverage, not just "XNNPACK".
 - **GPU — experimental attempt, not a peer lane.** ORT has **no first-class Android GPU
   execution provider**; GPU is only reachable via NNAPI, which on Tensor commonly falls back
   to CPU/EdgeTPU rather than Mali, and the ViT graph is documented to fail GPU delegation.
@@ -286,7 +290,10 @@ ffmpeg+JPEG path. Changing the production `video.py` to also drop the pre-scale/
   time. Vision **batch size auto-shrinks** on allocation failure (32 → 16 → 8 → 1).
   **OOM fallback:** on `OrtException`/OOM, drop precision toward fp16 (if not already) and/or
   batch 1; if still failing, surface a clear "model too large for this device" error rather
-  than crashing. so400m is the binding case — validate its peak RSS on-device in Phase 0.
+  than crashing. so400m is the binding case — **VERIFIED (Spike 0d)**: peak PSS ~3.19 GB with
+  both towers resident (fits 8 GB); vision batches 1–8 OK, **batch 32 thrashes the
+  low-memory-killer** → so400m batch ceiling ≤ 8; ~16 s/frame on CPU (see
+  `phase0-spike-results.md`).
 - Vision: batch frames through `vision_model.onnx` (default batch 32 like Python); time the
   vision pass — the dominant cost and the benchmark's headline.
 - Text: run `text_model.onnx` once over the label batch (before vision, per above).
