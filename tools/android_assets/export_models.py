@@ -166,3 +166,91 @@ def save_onnx(model, path, force_external: bool | None = None) -> None:
         )
     else:
         onnx.save_model(model, str(path))
+
+
+# Set by Spike 0a (Task 7). "unknown" until then; "tokenizer_json" if the Rust normalizer
+# already lowercases, else "kotlin_wrapper" (Android must lowercase before encoding).
+LOWERCASE_APPLIED_BY = "unknown"
+
+
+def extract_logit_params(model) -> tuple[float, float]:
+    """Read raw logit_scale and logit_bias (HF SiglipModel applies exp(scale) at runtime)."""
+    return float(model.logit_scale.detach().item()), float(model.logit_bias.detach().item())
+
+
+def build_manifest(spec: "ModelSpec", *, hf_revision: str, transformers_version: str,
+                   logit_scale: float, logit_bias: float,
+                   vision_path: Path, text_path: Path, tokenizer_path: Path,
+                   onnx_source: str, onnx_source_repo: str, onnx_source_revision: str):
+    from tools.android_assets.manifest import ModelBundleManifest, FileRef
+    from tools.android_assets.hashing import sha256_file
+
+    def _ref(p: Path) -> "FileRef":
+        data = p.parent / (p.name + "_data")
+        has_data = data.exists()
+        return FileRef(
+            file=p.name,
+            data_file=(data.name if has_data else None),
+            bytes=p.stat().st_size,
+            sha256=sha256_file(p),
+            data_sha256=(sha256_file(data) if has_data else None),
+        )
+
+    return ModelBundleManifest(
+        model_id=spec.model_id, hf_repo=spec.hf_repo, hf_revision=hf_revision,
+        onnx_source=onnx_source, onnx_source_repo=onnx_source_repo,
+        onnx_source_revision=onnx_source_revision,
+        display_name=spec.display_name, params=spec.params, resolution=spec.resolution,
+        precision=spec.precision, ram_budget_mb=spec.ram_budget_mb,
+        transformers_version=transformers_version,
+        logit_scale=logit_scale, logit_bias=logit_bias,
+        vision=_ref(vision_path), text=_ref(text_path),
+        tokenizer_sha256=sha256_file(tokenizer_path),
+        tokenizer_lowercase_applied_by=LOWERCASE_APPLIED_BY,
+    )
+
+
+def export_one(model_id: str, out_root: Path) -> Path:
+    from transformers import AutoModel
+    import transformers as _t
+    from huggingface_hub import model_info
+
+    spec = PROFILE_MODELS[model_id]
+    out_dir = out_root / model_id
+
+    # Acquire prebuilt towers at the target precision (+ tokenizer.json), normalized to
+    # canonical bundle paths. No precision conversion / serializer round-trip for prebuilt.
+    acquired = acquire_onnx(spec.hf_repo, spec.precision, out_dir)
+
+    # logit_scale / logit_bias come from the torch source model (downloaded to HF cache).
+    model = AutoModel.from_pretrained(spec.hf_repo)
+    scale, bias = extract_logit_params(model)
+
+    manifest = build_manifest(
+        spec,
+        hf_revision=model_info(spec.hf_repo).sha,
+        transformers_version=_t.__version__,
+        logit_scale=scale, logit_bias=bias,
+        vision_path=acquired["vision"], text_path=acquired["text"],
+        tokenizer_path=acquired["tokenizer"],
+        onnx_source=acquired["source"], onnx_source_repo=acquired["source_repo"],
+        onnx_source_revision=acquired["source_revision"],
+    )
+    (out_dir / "manifest.json").write_text(manifest.to_json())
+    return out_dir / "manifest.json"
+
+
+def main() -> int:
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", type=Path, default=Path("build/android_assets"))
+    ap.add_argument("--models", default=",".join(PROFILE_MODELS))
+    args = ap.parse_args()
+    for mid in [m.strip() for m in args.models.split(",")]:
+        print(f"[{mid}] exporting...")
+        print("  manifest:", export_one(mid, args.out))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

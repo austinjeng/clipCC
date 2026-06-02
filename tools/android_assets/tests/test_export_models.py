@@ -53,3 +53,19 @@ def test_save_onnx_external_data_when_forced(tmp_path):
     save_onnx(m, p, force_external=True)
     assert p.exists()
     assert (tmp_path / "ext.onnx_data").exists()
+
+
+import torch
+from tools.android_assets.export_models import extract_logit_params
+
+
+class _StubModel:
+    def __init__(self):
+        self.logit_scale = torch.nn.Parameter(torch.tensor(4.7654))
+        self.logit_bias = torch.nn.Parameter(torch.tensor(-16.53))
+
+
+def test_extract_logit_params_reads_raw_scalars():
+    scale, bias = extract_logit_params(_StubModel())
+    assert round(scale, 4) == 4.7654
+    assert round(bias, 2) == -16.53
