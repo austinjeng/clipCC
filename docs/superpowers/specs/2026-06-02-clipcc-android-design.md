@@ -128,7 +128,7 @@ evidenced, not a fabricated three-way win.
 
 | Module | Responsibility | Python analog |
 |---|---|---|
-| `tools/export_models.py` (host) | Per model: obtain ONNX (download `onnx-community/...` else `optimum-cli export onnx`); emit vision+text `.onnx` (fp32; fp16 for large/so400m), `tokenizer.json`, `preprocessor_config.json`, extracted `logit_scale`/`logit_bias`; generate golden parity fixtures | `scripts/download_models.py` |
+| `tools/android_assets/export_models.py` (host) | Per model: download prebuilt onnx-community towers at target precision (fp32 base; fp16 large/so400m) + any `.onnx_data` sibling + `tokenizer.json`; extract `logit_scale`/`logit_bias`; emit `manifest.json` (incl. derived `resample_contract`); optimum-cli fallback only if no prebuilt ONNX. Fixtures via `gen_fixtures.py`. | `scripts/download_models.py` |
 | `ModelStore` / `ModelManager` (Kotlin) | One active model at a time, hot-swap; holds ORT vision+text `OrtSession`s; **download-on-demand to app-specific storage** (adb-push fallback); per-model metadata + constants | `models/model_manager.py` |
 | `OrtBackend` | Build ORT `SessionOptions` per backend (CPU=XNNPACK EP; GPU/NPU=NNAPI EP attempt); run sessions; surface actual backend + fallback reason | `models/siglip2_model.py` |
 | `Tokenizer` (Rust `tokenizers` JNI `.so`) | Load `tokenizer.json`; encode labels → `input_ids[64]`, pad token 0, truncate at 64; byte-exact with HF | processor tokenize path |
@@ -164,6 +164,16 @@ field maps to a real parity/benchmark need; no speculative fields.
   defaults + valid `contrast_reduce` modes, exact response shape.
 - **`BackendCapabilityReport`** (runtime, not generated) — requested backend, applied
   EP/delegate, node coverage / profiling evidence, fallback reason (§3).
+
+**Schema versioning (resolved in Phase 0 plan).** `manifest.json` carries `schema_version`.
+**v1** includes the fields above plus provenance (`hf_revision` for the `google/` source +
+`onnx_source_repo`/`onnx_source_revision` for the actual ONNX bytes), `ram_budget_mb`, per-file
+`sha256`/`data_sha256`, tokenizer `padding_side`, and an exact `resample_contract` (the real
+`AutoProcessor` image-processor params, not the raw `preprocessor_config.json`). v1
+**intentionally defers** `FramePipelineSpec` rotation/color-range/SDR-HDR/color-space/timestamp
+policy and the full `ScoringPolicySpec` (rounding, temporal gap=2.0/min-dur=1.0, contrast
+defaults, response shape) to a **schema v2 bump in Plan 3** — consuming temporal/contrast
+defaults requires it. Recorded so the boundary is explicit, not silently incomplete.
 
 ### 5.1 Model asset pipeline (host, Phase 0)
 - For each of the 4 models: prefer downloading the prebuilt `onnx-community/siglip2-*-ONNX`
