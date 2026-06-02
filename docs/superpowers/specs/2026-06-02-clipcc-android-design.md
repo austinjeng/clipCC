@@ -185,11 +185,17 @@ field maps to a real parity/benchmark need; no speculative fields.
   Rationale: `Siglip2Tokenizer` subclasses `GemmaTokenizer` (Rust-`tokenizers` BPE,
   `byte_fallback`, normalizer `Sequence([Lowercase(), Replace(" ", "▁")])`). A raw
   SentencePiece `.model` does not reproduce lowercasing / disabled add_dummy_prefix.
-- **Parity target is the `AutoProcessor` text path, not the raw tokenizer.** Lowercasing is
-  already in the fast tokenizer's serialized normalizer, so loading `tokenizer.json` does
-  **not** skip it (`do_lower_case` only affects the deprecated slow path). The residual
-  processor behavior the library does *not* do — `truncation=True`, `padding="max_length"`,
-  `max_length=64`, pad id = 0 — is implemented in Kotlin per `TokenizerSpec` (§5.0).
+- **Parity target is the `AutoProcessor` text path, not the raw tokenizer.** The residual
+  processor behavior the Rust library does *not* do — `truncation=True`,
+  `padding="max_length"`, `max_length=64`, pad id = 0 — is implemented in Kotlin per
+  `TokenizerSpec` (§5.0).
+- **UNRESOLVED — where lowercasing happens (Phase 0 spike, §10).** transformers v5 *source*
+  (`tokenization_siglip2.py`) defines the normalizer as `Sequence([Lowercase(), Replace])`,
+  but inspection of a *shipped* `tokenizer.json` artifact showed only space-replacement, with
+  `do_lower_case` in `tokenizer_config.json` (slow-path-only). If the on-hub artifact has no
+  `Lowercase` normalizer, the Rust `tokenizers` path will **not** lowercase and we must apply
+  it ourselves. Do **not** assume either way — the Phase 0 tokenizer spike resolves this with
+  a mixed-case golden set (`Car` vs `car`) against the exact pinned `AutoProcessor`.
 - Android build gotcha: `pthread_cond_clockwait` — fix with
   `CXXFLAGS='-lpthread -D__ANDROID_API__=<level>'`, API ≥ 21.
 - **Gate:** instrumented test asserts byte-exact equality against `tokenizer_golden.json`
@@ -252,16 +258,30 @@ swscale + JPEG q:v 2 on Android is impractical. Therefore parity is defined in *
   byte-exact (§5.3).
 
 ### 5.5 Inference runner & benchmark
-- Vision: batch frames through `vision_model.onnx` (batch size configurable, default 32 like
-  Python); time the vision pass — this is the dominant cost and the benchmark's headline.
-- Text: run `text_model.onnx` once over the label batch.
+- **Memory strategy (two towers + ORT overhead on so400m):** run the **text tower first**
+  over the label batch, cache the L2-normalized text embeddings, then **release the text
+  `OrtSession`** before creating the vision session. Only one large session is resident at a
+  time. Vision **batch size auto-shrinks** on allocation failure (32 → 16 → 8 → 1).
+  **OOM fallback:** on `OrtException`/OOM, drop precision toward fp16 (if not already) and/or
+  batch 1; if still failing, surface a clear "model too large for this device" error rather
+  than crashing. so400m is the binding case — validate its peak RSS on-device in Phase 0.
+- Vision: batch frames through `vision_model.onnx` (default batch 32 like Python); time the
+  vision pass — the dominant cost and the benchmark's headline.
+- Text: run `text_model.onnx` once over the label batch (before vision, per above).
 - Build `[F × L]` cosine + confidence matrices per the §2 contract.
 - Metrics per (model, backend): model-load ms, total inference ms, ms/frame, frames/sec,
   peak memory (best-effort), plus the `BackendCapabilityReport` (§5.0) — actual EP, **node
   coverage** (% delegated vs CPU-fallback from ORT profiling), and fallback reason.
 
 ### 5.6 Scoring port
-Port the Python aggregation semantics 1:1, with unit tests mirroring `tests/test_scoring.py`:
+Port from the **`ScoreBatch` sigmoid tensors only**. **Do NOT port `compute_frame_scores`**
+(`services/scoring.py:74`) — it is a stale CLIP-style **softmax** helper used by tests only,
+not by any production aggregation (all aggregations read `ctx.confidence` from `ScoreBatch`).
+Porting it would inject wrong (softmax, sum-to-1) semantics that contradict SigLIP2's
+independent per-label sigmoid. (Pre-existing in the Python repo; left as-is there.)
+
+Port the Python aggregation semantics 1:1, with unit tests mirroring `tests/test_scoring.py`
+(minus the `compute_frame_scores` tests):
 - `mean` (default): per-label mean confidence + mean raw_similarity; best = argmax confidence.
 - `max`: per-label max confidence + peak frame index + approx timestamp.
 - `temporal`: detection scores → threshold → segments (gap-merge, min-duration) → segment
@@ -326,25 +346,67 @@ tolerance**. Instrumented (on-device) + unit tests:
 
 ---
 
-## 9. Model provisioning
+## 9. Model provisioning (downloader spec)
 
-Models are 1.4–4.2 GB and **cannot be bundled in the APK/AAB**. Strategy:
-**download-on-demand** to app-specific external storage (with progress UI + sha256 verify),
-mirroring the Python `CLIP_CACHE_DIR` cache pattern; **adb-push fallback** for a dev phone
-(push the exported assets directly to the app's files dir). Active model loads one at a time;
-no two large models resident simultaneously.
+Models are 1.4–4.2 GB and **cannot be bundled in the APK/AAB**; download-on-demand to
+app-specific external storage, mirroring the Python `CLIP_CACHE_DIR` cache pattern. Concrete
+requirements (planned before implementation, not left abstract):
+
+- **External ONNX data:** `large-384` (fp32 ~3.3 GB) and `so400m` (fp16 ~2.1 GB) exceed the
+  **2 GB ONNX protobuf limit**, so they are exported as `model.onnx` + `model.onnx_data`.
+  The downloader must fetch **both** and place the external-data file **beside** the `.onnx`
+  with the exact expected filename, or ORT load fails. The manifest (§5.0) lists every file.
+- **Resumable downloads:** HTTP range / resume for multi-GB files; survive process death and
+  network drops; do not restart from zero.
+- **Free-space preflight:** check available bytes ≥ (download size + unpacked size + margin)
+  before starting; surface a clear error otherwise.
+- **Integrity:** sha256 each file against the manifest after download; reject/redownload on
+  mismatch; only mark a bundle "ready" when all files verify.
+- **Cache & eviction:** one resident model at a time on disk is *not* required, but provide
+  eviction (LRU or manual "remove model") so 4 bundles (~9 GB total) don't wedge the device.
+- **Source:** primary = HuggingFace (note: HF now serves large files via **Xet**, not plain
+  LFS — verify the Android HTTP client handles the resolve/redirect, or mirror the exported
+  bundles to our own object storage with plain range-GET). Decide in planning.
+- **adb-push fallback (dev phone):** push exported bundles directly to the app's files dir,
+  bypassing network — the fast path for this benchmark phone.
+- **Failure recovery:** partial/corrupt downloads are quarantined and retried; the UI never
+  shows a half-downloaded model as runnable.
+
+Runtime residency: active model loads one at a time; the text session is released before the
+vision pass to bound peak memory (§5.5).
 
 ---
 
 ## 10. Build order (phases)
 
-0. **Model + fixture prep** (host tooling). *Gate: 4 ONNX model sets + golden fixtures exist.*
+**Phase 0 — model/fixture prep + de-risking spikes.** Each spike is a hard gate; the engine
+is not "implementation-ready" until all four pass. Spikes are small, throwaway, and answer a
+single unknown:
+
+- **0a — Tokenizer spike:** resolve the lowercasing question (§5.2). Compare `AutoProcessor`
+  vs Rust `tokenizers` (loading the real `tokenizer.json`) + the Kotlin padding wrapper on a
+  mixed-case set (`Car`/`car`, punctuation, multi-word). *Gate: byte-exact, or the exact
+  extra normalization step is identified.*
+- **0b — ORT coverage spike:** on-device, run one tiny ONNX and one real SigLIP2 vision tower
+  under XNNPACK + NNAPI; confirm how to read **node coverage / EP assignment** from the ORT
+  **Java** API (profiling JSON or session logs). *Gate: a reliable "% delegated" number, or a
+  documented fallback parse.*
+- **0c — Downloader spike:** fetch one model **with external `.onnx_data`** (e.g. `so400m`
+  fp16) end-to-end: resume, free-space check, sha256, correct co-located placement, ORT load.
+  *Gate: a >2 GB external-data model loads in ORT on-device.*
+- **0d — Memory spike:** load + run `so400m` fp16 vision tower on the Pixel 7a at batch 32;
+  measure peak RSS; confirm the text-first/release strategy (§5.5) keeps it within budget.
+  *Gate: so400m completes a 300-frame run without OOM, or the auto-shrink/fallback path is
+  proven.*
+- **0e — Model + fixtures:** export/obtain the 4 ONNX bundles + emit manifests + golden
+  fixtures (lossless-frame based, §8). *Gate: 4 bundles + fixtures exist and verify.*
+
 1. **Headless engine**: ORT sessions + tokenizer JNI + preprocess + frame sampler + scoring
-   port. *Gate: parity tests (§8.1–8.4) green.*
-2. **Benchmark harness**: backend switching + timing + attempt-and-report. *Gate: 4 models ×
-   3 backends produce metrics with correct backend labeling.*
+   port. *Gate: parity tests (§8.1–8.3, 8.5) green.*
+2. **Benchmark harness**: backend switching + timing + `BackendCapabilityReport`. *Gate: 4
+   models × 3 backends produce metrics with correct backend labeling + node coverage.*
 3. **Compose UI**: setup → results → benchmark panel wired to the engine. *Gate: all 4 modes
-   render; benchmark panel shows per-model/backend timings.*
+   render; benchmark panel shows per-model/backend timings + coverage + experimental badges.*
 
 ---
 
@@ -382,3 +444,18 @@ no two large models resident simultaneously.
   512 aspect-preserving pre-scale + JPEG round-trip, wider tolerance) **or** define a clean
   lossless reference (PNG, no pre-scale) and update the Python side to match. Decide before
   building `FrameSampler`; record in `FramePipelineSpec`.
+
+**Planning decisions to settle in `writing-plans` (before the relevant phase):**
+- **Project layout:** where the Android project lives (new repo vs `android/` dir in this
+  repo) and module structure (`:engine` headless lib, `:app` UI, `:tokenizer` JNI).
+- **Manifest JSON schema + versioning:** exact field types + a `schema_version` so Android
+  rejects incompatible bundles (mirrors the Python `.validated` marker `schema_version`).
+- **Benchmark protocol:** warm-up runs, number of timed iterations, discard-first, mean/median
+  + variance reporting, fixed input set — so numbers are reproducible, not single-shot.
+- **Long-op lifecycle:** foreground service + notification for multi-GB downloads and long
+  inference; cooperative cancellation (mirrors Python's `cancel_event`/timeout) so the user
+  can abort a run.
+- **Video input:** `content://` URI handling from the picker (persistable permissions,
+  copy-to-cache vs stream), and the constraint set (max duration/frames) mirroring `video.py`.
+- **Golden-fixture size budget:** keep `tokenizer_golden`/`preprocess_golden`/`scores_golden`
+  small enough for the repo + CI (a handful of frames/labels), not full videos.
