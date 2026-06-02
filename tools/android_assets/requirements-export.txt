@@ -1,0 +1,10 @@
+transformers
+optimum-onnx
+onnx
+onnxruntime
+torch
+Pillow
+numpy
+huggingface_hub
+tokenizers
+pytest
