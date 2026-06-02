@@ -50,13 +50,13 @@
     "truncation": true, "lowercase_applied_by": "unknown"
   },
   "preprocess": {
-    "resize": "stretch_square", "resample": "bicubic",
+    "resize": "stretch_square", "resample": "bilinear",
     "rescale": 0.00392156862745098,
     "mean": [0.5, 0.5, 0.5], "std": [0.5, 0.5, 0.5], "layout": "CHW"
   },
   "frame_pipeline": {
     "fps": 1.0, "max_frames": 300,
-    "prescale": "none", "intermediate_codec": "none", "resample": "bicubic"
+    "prescale": "none", "intermediate_codec": "none", "resample": "bilinear"
   }
 }
 ```
@@ -228,7 +228,7 @@ def test_round_trip_preserves_fields_and_schema_version():
     assert parsed["schema_version"] == SCHEMA_VERSION == 1
     assert parsed["profile"] == "benchmark-v1"
     assert parsed["score_semantics"] == "siglip2_pairwise_sigmoid"
-    assert parsed["preprocess"]["resample"] == "bicubic"
+    assert parsed["preprocess"]["resample"] == "bilinear"
     assert parsed["frame_pipeline"]["prescale"] == "none"
     assert parsed["tokenizer"]["lowercase_applied_by"] == "unknown"
     assert parsed["tokenizer"]["padding_side"] == "right"
@@ -332,7 +332,7 @@ class ModelBundleManifest:
             },
             "preprocess": {
                 "resize": "stretch_square",
-                "resample": "bicubic",
+                "resample": "bilinear",
                 "rescale": 0.00392156862745098,
                 "mean": [0.5, 0.5, 0.5],
                 "std": [0.5, 0.5, 0.5],
@@ -343,7 +343,7 @@ class ModelBundleManifest:
                 "max_frames": 300,
                 "prescale": "none",
                 "intermediate_codec": "none",
-                "resample": "bicubic",
+                "resample": "bilinear",
             },
         }
         return json.dumps(doc, indent=2)
@@ -1111,9 +1111,9 @@ def test_gen_all_produces_consistent_fixtures(tmp_path):
         for v in row:
             assert -1.0001 <= v <= 1.0001
 
-    # exact resample contract captured for the Android bicubic target (M16)
+    # exact resample contract captured for the Android bilinear target (M16)
     rs = json.loads((tmp_path / "resample_contract.json").read_text())
-    assert rs["resample"] in ("bicubic", 3)
+    assert rs["resample"] in (2, "bilinear")  # SigLIP2 = PIL BILINEAR (resample=2)
     assert rs["size"]["height"] == res and rs["size"]["width"] == res
     assert rs["image_mean"] == [0.5, 0.5, 0.5] and rs["image_std"] == [0.5, 0.5, 0.5]
 ```
@@ -1123,7 +1123,7 @@ def test_gen_all_produces_consistent_fixtures(tmp_path):
 Run: `.venv-export/bin/python -m pytest tools/android_assets/tests/test_gen_fixtures.py -v`
 Expected: FAIL with `ModuleNotFoundError`
 
-- [ ] **Step 4: Implement `gen_fixtures.py` (lossless: PNG → bicubic square → normalize)**
+- [ ] **Step 4: Implement `gen_fixtures.py` (lossless: PNG → bilinear square → normalize)**
 
 Create `tools/android_assets/gen_fixtures.py`:
 ```python
@@ -1158,7 +1158,7 @@ def gen_all(hf_repo: str, frames_dir: Path, labels: list[str], out_dir: Path) ->
         tok_rows.append({"text": text, "input_ids": ids})
     (out_dir / "tokenizer_golden.json").write_text(json.dumps(tok_rows, indent=2))
 
-    # --- lossless frames: PNG -> AutoProcessor image path (bicubic square, normalize) ---
+    # --- lossless frames: PNG -> AutoProcessor image path (bilinear square, normalize) ---
     frame_paths = sorted(frames_dir.glob("*.png"))
     images = [Image.open(p).convert("RGB") for p in frame_paths]
     pixel_values = proc(images=images, return_tensors="np")["pixel_values"]  # [F,3,R,R]
@@ -1180,12 +1180,12 @@ def gen_all(hf_repo: str, frames_dir: Path, labels: list[str], out_dir: Path) ->
         "cosine": cosine.tolist(),
     }, indent=2))
 
-    # --- exact resample/normalize contract for the Android bicubic target (M16) ---
+    # --- exact resample/normalize contract for the Android bilinear target (M16) ---
     ip = proc.image_processor
     contract = {
         "do_resize": getattr(ip, "do_resize", True),
         "size": dict(getattr(ip, "size", {})),
-        "resample": getattr(ip, "resample", 3),  # PIL.Image.BICUBIC == 3
+        "resample": getattr(ip, "resample", 2),  # PIL.Image.BILINEAR == 2 (SigLIP2 default)
         "antialias": getattr(ip, "antialias", None),
         "do_rescale": getattr(ip, "do_rescale", True),
         "rescale_factor": getattr(ip, "rescale_factor", 1 / 255),

@@ -132,7 +132,7 @@ evidenced, not a fabricated three-way win.
 | `ModelStore` / `ModelManager` (Kotlin) | One active model at a time, hot-swap; holds ORT vision+text `OrtSession`s; **download-on-demand to app-specific storage** (adb-push fallback); per-model metadata + constants | `models/model_manager.py` |
 | `OrtBackend` | Build ORT `SessionOptions` per backend (CPU=XNNPACK EP; GPU/NPU=NNAPI EP attempt); run sessions; surface actual backend + fallback reason | `models/siglip2_model.py` |
 | `Tokenizer` (Rust `tokenizers` JNI `.so`) | Load `tokenizer.json`; encode labels → `input_ids[64]`, pad token 0, truncate at 64; byte-exact with HF | processor tokenize path |
-| `Preprocess` | Bitmap → RGB → **bicubic** stretch-to-square at model resolution → ×(1/255) → (x−0.5)/0.5 → CHW float tensor | SigLIP image processor |
+| `Preprocess` | Bitmap → RGB → **bilinear** stretch-to-square at model resolution → ×(1/255) → (x−0.5)/0.5 → CHW float tensor | SigLIP image processor |
 | `FrameSampler` | Media3 `FrameExtractor`; sample at fps=1.0; cap `max_frames=300`; emit frames + approx timestamps | `services/video.py` + `frame_timeline.py` |
 | `InferenceRunner` + `Benchmark` | Batched vision encode (timed), text encode, build `[F × L]` cosine/confidence matrices; collect per-backend metrics | `inference_runner.py` |
 | `Scoring` | Port `aggregate_mean` / `aggregate_max` / `aggregate_temporal` / `aggregate_contrast` + `FrameTimeline` + temporal policy + contrast policy | `services/scoring.py`, `frame_timeline.py`, `temporal_policy.py` |
@@ -157,7 +157,7 @@ field maps to a real parity/benchmark need; no speculative fields.
   and to detect drift.)
 - **`FramePipelineSpec`** — sampling fps, timestamp policy, rotation policy, color-range /
   SDR-HDR / color-space policy, and the **pre-scale + JPEG-compatibility choice** (§5.4).
-- **`PreprocessSpec`** — resize mode (stretch-to-square), resample kernel (bicubic),
+- **`PreprocessSpec`** — resize mode (stretch-to-square), resample kernel (bilinear),
   normalization (mean/std 0.5 → [−1,1]), tensor layout (CHW).
 - **`ScoringPolicySpec`** — `siglip2_pairwise_sigmoid` semantics, `logit_scale`/`logit_bias`,
   rounding (6 dp, matching Python), temporal defaults (gap 2.0 / min-dur 1.0), contrast
@@ -221,21 +221,27 @@ From `preprocessor_config.json`:
 4. Normalize `(x − 0.5) / 0.5` (mean = std = [0.5, 0.5, 0.5]) → range **[−1, 1]**.
 5. Channel-first CHW.
 
-**Parity gotcha (resampler):** Android `Bitmap.createScaledBitmap` is bilinear/nearest only —
-no bicubic. Exact bicubic parity requires a **native resampler** (e.g. bundled libswscale, or
-a custom bicubic kernel) or scores will drift per frame. Validated by `preprocess_golden`.
+**Resampler (RESOLVED — Spike 0a/Task 8, 2026-06-03):** SigLIP2's `preprocessor_config.json`
+specifies **`resample=2` (PIL BILINEAR)** for all 4 profile models — **not bilinear** (an
+earlier assumption). This is good news: Android's `Bitmap.createScaledBitmap(filter=true)` *is*
+bilinear, so **no custom bilinear kernel is needed**. Residual parity risk: the host export env
+uses the **slow PIL** bilinear (no torchvision), while the server `.venv` has torchvision
+0.27.0 and may use the **fast** `SiglipImageProcessorFast` (torchvision bilinear) — PIL vs
+torchvision bilinear differ subtly. Plan-1 must (a) decide which processor the fixtures are
+generated with and (b) set the Android-bilinear-vs-reference tolerance. Validated by
+`preprocess_golden`; `resample_contract.json` carries the authoritative per-model value.
 
 **Parity gotcha (the full Python pixel path is lossy and aspect-preserving):** the Python
 reference does *not* feed raw decoded frames into this step. `services/video.py` runs
 `ffmpeg ... -vf "fps=N,scale='min(512,iw)':'min(512,ih)':force_original_aspect_ratio=decrease"
 -q:v 2` — i.e. it (a) downscales to fit within 512×512 **preserving aspect ratio** and then
-(b) re-encodes each frame to **lossy JPEG (q:v 2)** before SigLIP's own bicubic square resize.
+(b) re-encodes each frame to **lossy JPEG (q:v 2)** before SigLIP's own bilinear square resize.
 So there are two pixel-altering stages upstream of §5.3. Byte-for-byte replication of ffmpeg
 swscale + JPEG q:v 2 on Android is impractical. Therefore parity is defined in **two layers**:
 
 - **Model-math parity (must be exact, gated):** generate `preprocess_golden` and
   `scores_golden` by feeding **identical lossless frames** (e.g. pre-extracted PNGs) through
-  *both* the Python `__call__`-equivalent (bicubic stretch → normalize) and the Android
+  *both* the Python `__call__`-equivalent (bilinear stretch → normalize) and the Android
   pipeline. This isolates and locks the tensor + model math from frame-decode noise.
 - **End-to-end decode parity (documented tolerance, not exact):** the Android `FrameSampler`
   (§5.4) decodes via Media3, not ffmpeg+JPEG, so end-to-end scores carry a documented,
@@ -243,13 +249,13 @@ swscale + JPEG q:v 2 on Android is impractical. Therefore parity is defined in *
 
 **DECISION (locked): lossless reference pipeline.** The parity contract is defined against a
 **lossless** reference — frames extracted as **PNG with no 512 pre-scale**, fed straight into
-SigLIP bicubic stretch-to-square + normalize. The fixture-generation script (host) uses this
-lossless path; the Android `FrameSampler` decodes via Media3 and resizes bicubic with **no
+SigLIP bilinear stretch-to-square + normalize. The fixture-generation script (host) uses this
+lossless path; the Android `FrameSampler` decodes via Media3 and resizes bilinear with **no
 pre-scale and no JPEG round-trip**. We do **not** replicate the production `video.py` lossy
 ffmpeg+JPEG path. Changing the production `video.py` to also drop the pre-scale/JPEG is
 **out of scope** for this app (optional future cleanup on the Python side).
 `FramePipelineSpec` records: `prescale=none`, `intermediate_codec=none (lossless)`,
-`resample=bicubic`.
+`resample=bilinear`.
 
 ### 5.4 Frame extraction
 - Use **Media3 `androidx.media3.inspector.frame.FrameExtractor`** (media3-inspector,
@@ -334,7 +340,7 @@ Use the `mobile-android-design` skill during implementation.
 ```
 pick model → pick backend → pick video + labels (+ mode options)
   → FrameSampler (fps=1, cap 300)
-  → Preprocess (bicubic → CHW [-1,1])
+  → Preprocess (bilinear → CHW [-1,1])
   → vision encode (TIMED)  ──┐
   → text encode (labels)  ───┤
                              ├→ cosine/confidence [F×L]
@@ -350,7 +356,7 @@ Two-layer parity (§5.3): **model-math = exact/gated**, **end-to-end decode = do
 tolerance**. Instrumented (on-device) + unit tests:
 1. **Tokenizer** — byte-exact `text → input_ids` vs `tokenizer_golden.json` (from `AutoProcessor`).
 2. **Preprocess (model-math layer)** — CHW tensor within tolerance vs `preprocess_golden`,
-   built from **lossless** frames through both pipelines (validates the bicubic resampler,
+   built from **lossless** frames through both pipelines (validates the bilinear resampler,
    isolated from decode noise).
 3. **End-to-end (model-math layer)** — fp32 cosine + confidence within tolerance vs
    `scores_golden.json`, also from lossless frames.
@@ -430,8 +436,10 @@ single unknown:
 
 1. **ONNX availability** — `onnx-community` shipped `-224`; the exact 256/384/so400m repos
    must be verified. *Mitigation:* Phase 0 gate; self-export via Optimum if missing.
-2. **Bicubic parity** — Android lacks bicubic; bilinear shifts scores. *Mitigation:* native
-   bicubic resampler; validated by fixture #2.
+2. **Resampler parity** — SigLIP2 uses **bilinear** (resample=2), which Android provides
+   natively (`createScaledBitmap(filter=true)`), so the bilinear concern is gone. Residual:
+   slow-PIL (host) vs fast-torchvision (server) bilinear differ subtly. *Mitigation:* pin which
+   processor generates fixtures + set tolerance; validated by fixture #2.
 3. **so400m fp16 parity** — no SigLIP2-specific fp16 data exists. *Mitigation:* validate
    empirically per model; hybrid-fp32 sensitive layers if cosine drift exceeds tolerance.
 4. **GPU/NPU don't accelerate** — accepted up front. *Mitigation:* attempt-and-report (§3).
@@ -457,7 +465,7 @@ single unknown:
 - Whether to ship fp16 for base/large by default or keep fp32 as the shipped precision with
   fp16 as a benchmark toggle.
 - ~~**Frame-pipeline parity policy** (§5.3)~~ — **DECIDED: lossless reference** (PNG, no
-  pre-scale, bicubic; production `video.py` unchanged, out of scope). See §5.3.
+  pre-scale, bilinear; production `video.py` unchanged, out of scope). See §5.3.
 
 **Planning decisions to settle in `writing-plans` (before the relevant phase):**
 - **Project layout:** where the Android project lives (new repo vs `android/` dir in this
