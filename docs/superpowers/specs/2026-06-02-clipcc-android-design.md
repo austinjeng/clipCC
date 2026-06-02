@@ -225,15 +225,19 @@ From `preprocessor_config.json`:
 4. Normalize `(x − 0.5) / 0.5` (mean = std = [0.5, 0.5, 0.5]) → range **[−1, 1]**.
 5. Channel-first CHW.
 
-**Resampler (RESOLVED — Spike 0a/Task 8, 2026-06-03):** SigLIP2's `preprocessor_config.json`
-specifies **`resample=2` (PIL BILINEAR)** for all 4 profile models — **not bilinear** (an
-earlier assumption). This is good news: Android's `Bitmap.createScaledBitmap(filter=true)` *is*
-bilinear, so **no custom bilinear kernel is needed**. Residual parity risk: the host export env
-uses the **slow PIL** bilinear (no torchvision), while the server `.venv` has torchvision
-0.27.0 and may use the **fast** `SiglipImageProcessorFast` (torchvision bilinear) — PIL vs
-torchvision bilinear differ subtly. Plan-1 must (a) decide which processor the fixtures are
-generated with and (b) set the Android-bilinear-vs-reference tolerance. Validated by
-`preprocess_golden`; `resample_contract.json` carries the authoritative per-model value.
+**Resampler (RESOLVED — Spike 0a/Task 8 + Plan-1 grounding, 2026-06-03):** SigLIP2's
+`preprocessor_config.json` specifies **`resample=2` (PIL BILINEAR)** for all 4 profile models —
+**not bicubic** (an earlier assumption). BUT a **custom Kotlin resampler is still required**:
+PIL bilinear is **convolution-based and antialiases on downscale** (and video frames downscale
+to 256/384), whereas Android's `Bitmap.createScaledBitmap(filter=true)` is plain 2×2 bilinear
+with **no prefilter** → tens-of-LSB drift → **label flips near the 0.5 sigmoid threshold**. So
+`createScaledBitmap` is **insufficient**; Plan 1 ports PIL's separable-triangle resize to Kotlin
+(per-axis support; antialiased). (The `antialias: null` in `resample_contract.json` is a red
+herring — it gated the legacy LANCZOS path, not PIL's always-on triangle prefilter.) Residual
+parity risk: host fixtures use **slow PIL** bilinear; the server `.venv` has torchvision 0.27.0
+and may use **fast** `SiglipImageProcessorFast` (≈1–2 LSB delta vs PIL). Decision: generate
+fixtures with **slow PIL** (deterministic, version-stable); set tolerance accordingly.
+`resample_contract.json` carries the authoritative per-model value.
 
 **Parity gotcha (the full Python pixel path is lossy and aspect-preserving):** the Python
 reference does *not* feed raw decoded frames into this step. `services/video.py` runs
@@ -443,10 +447,11 @@ single unknown:
 
 1. **ONNX availability** — `onnx-community` shipped `-224`; the exact 256/384/so400m repos
    must be verified. *Mitigation:* Phase 0 gate; self-export via Optimum if missing.
-2. **Resampler parity** — SigLIP2 uses **bilinear** (resample=2), which Android provides
-   natively (`createScaledBitmap(filter=true)`), so the bilinear concern is gone. Residual:
-   slow-PIL (host) vs fast-torchvision (server) bilinear differ subtly. *Mitigation:* pin which
-   processor generates fixtures + set tolerance; validated by fixture #2.
+2. **Resampler parity** — SigLIP2 uses **bilinear** (resample=2), but PIL bilinear
+   **antialiases on downscale** and Android `createScaledBitmap` does not → label flips near 0.5.
+   *Mitigation:* Plan 1 ports PIL's separable-triangle resize to Kotlin (NOT `createScaledBitmap`);
+   fixtures use slow-PIL; residual slow-PIL vs fast-torchvision delta is a tolerance to set;
+   validated by fixture #2.
 3. **so400m fp16 parity** — no SigLIP2-specific fp16 data exists. *Mitigation:* validate
    empirically per model; hybrid-fp32 sensitive layers if cosine drift exceeds tolerance.
 4. **GPU/NPU don't accelerate** — accepted up front. *Mitigation:* attempt-and-report (§3).

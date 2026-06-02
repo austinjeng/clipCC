@@ -52,9 +52,11 @@ def gen_all(hf_repo: str, frames_dir: Path, labels: list[str], out_dir: Path) ->
     }, indent=2))
 
     # --- exact resample/normalize contract for the Android resampler target (M16) ---
-    # SigLIP2 uses resample=2 (PIL BILINEAR) for all 4 profile models — Android's
-    # Bitmap.createScaledBitmap(filter=true) is bilinear, so this is reproducible without a
-    # custom bicubic kernel. resample_contract.json is the authoritative per-model value.
+    # SigLIP2 uses resample=2 (PIL BILINEAR) for all 4 profile models. PIL bilinear is
+    # convolution-based and ANTIALIASES on downscale, so Android's plain Bitmap.createScaledBitmap
+    # does NOT match — Plan 1 ports a custom separable-triangle resampler in Kotlin.
+    # resample_contract.json is the authoritative per-model value. (antialias=null here is a red
+    # herring: it gated the legacy LANCZOS path, not PIL's always-on triangle prefilter.)
     ip = proc.image_processor
     contract = {
         "do_resize": getattr(ip, "do_resize", True),

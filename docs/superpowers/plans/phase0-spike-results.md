@@ -87,8 +87,10 @@ staged) — true external-data load + resumable/Xet download remain a **Plan 2**
 
 ## Updates folded into the spec (`2026-06-02-clipcc-android-design.md`)
 - §5.2 tokenizer → RESOLVED (case-sensitive, `tokenizer_json`, no Android lowercasing).
-- §5.3 + risks → resampler is **BILINEAR** (resample=2), not bicubic; Android `createScaledBitmap`
-  bilinear matches; residual slow-PIL(host) vs fast-torchvision(server) tolerance = Plan-1 item.
+- §5.3 + risks → resampler is **BILINEAR** (resample=2), not bicubic — but Android
+  `createScaledBitmap` (plain 2×2 bilinear, no antialias prefilter) does **NOT** match PIL's
+  antialiased bilinear on downscale → Plan 1 ports a custom separable-triangle resampler in
+  Kotlin. Residual slow-PIL(host) vs fast-torchvision(server) tolerance = Plan-1 item.
 - §3 / §5.5 → NNAPI 0% delegated (CPU-only); so400m peak ~3.19 GB, batch ≤ 8, ~16 s/frame CPU.
 
 ## Carried into Plan 1/2 as open items
