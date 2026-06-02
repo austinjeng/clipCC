@@ -170,7 +170,7 @@ def save_onnx(model, path, force_external: bool | None = None) -> None:
 
 # Set by Spike 0a (Task 7). "unknown" until then; "tokenizer_json" if the Rust normalizer
 # already lowercases, else "kotlin_wrapper" (Android must lowercase before encoding).
-LOWERCASE_APPLIED_BY = "unknown"
+LOWERCASE_APPLIED_BY = "kotlin_wrapper"
 
 
 def extract_logit_params(model) -> tuple[float, float]:
