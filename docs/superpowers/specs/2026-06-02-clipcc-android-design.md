@@ -37,7 +37,13 @@ Secondary purpose: **full functional parity** with the Python web UI.
 
 ---
 
-## 2. The 4 models & numerical contract
+## 2. Benchmark model profile & numerical contract
+
+**Naming:** these four are a **named benchmark profile** (`benchmark-v1`), *not* "the defaults".
+They match neither the Python `default_model_id` (`siglip2-base-patch16-256` only) nor the
+`scripts/download_models.py` `DEV_MODELS` preset
+(`base-256` / `large-512` / `so400m-384` / `giant-384`). The profile below is the
+user-selected set for this app and is pinned by HF revision in the manifest (§5.0).
 
 | Model id | HF repo | Params | Resolution | Device precision |
 |---|---|---|---|---|
@@ -86,29 +92,35 @@ latest stable 1.26.0 as of 2026-05) running **prebuilt SigLIP2 ONNX towers** on 
 - XNNPACK CPU is mature, ARM/KleidiAI-optimized, fp32-parity-safe, and on a Pixel 7a is the
   realistic fastest *reliable* path for a transformer anyway.
 
-**Backends available on Tensor G2 (the honest truth):**
-- **CPU (XNNPACK):** real, reliable, fp32-parity-safe. The baseline and only "real" leg.
-- **GPU:** ORT has **no first-class Android GPU execution provider**; GPU is only reachable
-  via NNAPI, which on Tensor commonly falls back to CPU/EdgeTPU rather than Mali. Treat as
-  best-effort/attempt-and-report.
-- **NPU/EdgeTPU:** **structurally unavailable** to third-party custom models on Tensor G2.
-  NNAPI deprecated (Android 15/API 35); LiteRT NPU delegate is Qualcomm/Intel only; Google's
-  Tensor ML SDK is private-beta and Pixel 10 / Tensor G5 only. Any "NPU" run resolves to a
-  CPU/GPU fallback. This is the strongest, adversarially-confirmed research finding.
+**Backends on Tensor G2 — one benchmark lane + two experimental attempts (the honest truth):**
+- **CPU (XNNPACK) — the benchmark lane.** Real, reliable, fp32-parity-safe. Even here,
+  XNNPACK only accelerates *supported* nodes; unsupported nodes fall back to the ORT CPU EP.
+  The report must therefore state node coverage, not just "XNNPACK".
+- **GPU — experimental attempt, not a peer lane.** ORT has **no first-class Android GPU
+  execution provider**; GPU is only reachable via NNAPI, which on Tensor commonly falls back
+  to CPU/EdgeTPU rather than Mali, and the ViT graph is documented to fail GPU delegation.
+- **NPU/EdgeTPU — experimental attempt, expected to be unavailable.** **Structurally
+  unavailable** to third-party custom models on Tensor G2. NNAPI deprecated (Android 15/API
+  35); LiteRT NPU delegate is Qualcomm/Intel only; Google's Tensor ML SDK is private-beta and
+  Pixel 10 / Tensor G5 only. Any "NPU" run resolves to a CPU/GPU fallback. Strongest,
+  adversarially-confirmed research finding.
 
-### Benchmark UX contract: attempt-and-report
+### Benchmark UX contract: attempt-and-report with provider evidence
 
-Three backend modes `CPU` / `GPU` / `NPU`. Each:
+Three backend modes `CPU` / `GPU` / `NPU`. CPU is the benchmark; GPU/NPU are labeled
+**experimental**. Each run:
 1. Attempts to acquire its delegate/EP.
 2. On unavailability or apply-failure, **catches it, logs the reason, and runs on the actual
    fallback backend**.
-3. Reports the **actual backend used** plus the reason, e.g.
-   `"NPU unavailable on Tensor G2 (no public delegate) — ran on CPU"` or
-   `"GPU delegate failed to apply on ViT graph — ran on CPU"`.
+3. Emits a **`BackendCapabilityReport`** (§5.0): requested backend; applied EP/delegate;
+   **node coverage** (count + % of graph nodes assigned to the target EP vs CPU fallback,
+   read from ORT partitioning / `enable_profiling`); fallback reason. This is the deeper
+   truth the benchmark reports — not merely "NNAPI attempted".
 4. **Never** relabels a CPU run as "GPU" or "NPU".
 
-Deliverable: **CPU (real) vs GPU (real-or-failed-with-reason) vs NPU (always
-fallback-with-reason)** — a defensible, accurate result, not a fabricated three-way win.
+Deliverable: **CPU (real, with node-coverage evidence) vs GPU (experimental, real-or-failed-
+with-reason + coverage) vs NPU (experimental, always fallback-with-reason)** — defensible and
+evidenced, not a fabricated three-way win.
 
 ---
 
@@ -130,15 +142,37 @@ fallback-with-reason)** — a defensible, accurate result, not a fabricated thre
 
 ## 5. Sub-system specifications
 
+### 5.0 Generated contract manifest (the parity boundary)
+
+The host pipeline (§5.1) emits **one generated `ModelBundleManifest`** per model that Android
+consumes and golden fixtures validate against. This is the single boundary across which
+Android may vary implementation but must satisfy a generated contract. Kept lean — every
+field maps to a real parity/benchmark need; no speculative fields.
+
+- **`ModelBundle`** — model id, HF repo + pinned revision, precision (fp32/fp16), ONNX file
+  names (vision/text) + any external-data files, byte sizes, sha256, resolution, RAM budget.
+- **`TokenizerSpec`** — `tokenizer.json` ref + `tokenizer_config.json`-derived settings
+  (lowercasing, `padding_side`, special tokens, pad id), `max_length=64`, padding mode,
+  truncation. (Lowercasing is in the fast-tokenizer normalizer; captured here for completeness
+  and to detect drift.)
+- **`FramePipelineSpec`** — sampling fps, timestamp policy, rotation policy, color-range /
+  SDR-HDR / color-space policy, and the **pre-scale + JPEG-compatibility choice** (§5.4).
+- **`PreprocessSpec`** — resize mode (stretch-to-square), resample kernel (bicubic),
+  normalization (mean/std 0.5 → [−1,1]), tensor layout (CHW).
+- **`ScoringPolicySpec`** — `siglip2_pairwise_sigmoid` semantics, `logit_scale`/`logit_bias`,
+  rounding (6 dp, matching Python), temporal defaults (gap 2.0 / min-dur 1.0), contrast
+  defaults + valid `contrast_reduce` modes, exact response shape.
+- **`BackendCapabilityReport`** (runtime, not generated) — requested backend, applied
+  EP/delegate, node coverage / profiling evidence, fallback reason (§3).
+
 ### 5.1 Model asset pipeline (host, Phase 0)
 - For each of the 4 models: prefer downloading the prebuilt `onnx-community/siglip2-*-ONNX`
   artifacts; if the exact resolution repo does not exist, run
   `optimum-cli export onnx --model google/siglip2-<variant> ...` to produce
   `vision_model.onnx` and `text_model.onnx`.
 - Produce **fp32** (parity reference) and **fp16** (so400m mandatory; large preferred).
-- Extract `logit_scale` and `logit_bias` scalars from the checkpoint; write a per-model
-  `model.json` (id, display name, params, resolution, precision, logit_scale, logit_bias,
-  vision/text file names + sizes + sha256).
+- Extract `logit_scale` and `logit_bias` scalars from the checkpoint; emit the
+  **`ModelBundleManifest`** (§5.0) per model — the generated contract Android + tests consume.
 - Generate **golden fixtures** from the exact pinned `transformers` version + checkpoint:
   - `tokenizer_golden.json`: list of `(text, input_ids[64])`.
   - `preprocess_golden.npz`: sample images → expected CHW tensors.
@@ -151,12 +185,16 @@ fallback-with-reason)** — a defensible, accurate result, not a fabricated thre
   Rationale: `Siglip2Tokenizer` subclasses `GemmaTokenizer` (Rust-`tokenizers` BPE,
   `byte_fallback`, normalizer `Sequence([Lowercase(), Replace(" ", "▁")])`). A raw
   SentencePiece `.model` does not reproduce lowercasing / disabled add_dummy_prefix.
-- The library only returns subword IDs. Implement in Kotlin: `truncation=True`,
-  `padding="max_length"`, `max_length=64`, pad id = 0.
+- **Parity target is the `AutoProcessor` text path, not the raw tokenizer.** Lowercasing is
+  already in the fast tokenizer's serialized normalizer, so loading `tokenizer.json` does
+  **not** skip it (`do_lower_case` only affects the deprecated slow path). The residual
+  processor behavior the library does *not* do — `truncation=True`, `padding="max_length"`,
+  `max_length=64`, pad id = 0 — is implemented in Kotlin per `TokenizerSpec` (§5.0).
 - Android build gotcha: `pthread_cond_clockwait` — fix with
   `CXXFLAGS='-lpthread -D__ANDROID_API__=<level>'`, API ≥ 21.
-- **Gate:** instrumented test asserts byte-exact equality against `tokenizer_golden.json`.
-  Pin `transformers`; regenerate fixtures on bump.
+- **Gate:** instrumented test asserts byte-exact equality against `tokenizer_golden.json`
+  (generated from the exact pinned `AutoProcessor` + checkpoint). Pin `transformers`;
+  regenerate fixtures on bump.
 
 ### 5.3 Preprocessing (SigLIP exact)
 From `preprocessor_config.json`:
@@ -167,18 +205,51 @@ From `preprocessor_config.json`:
 4. Normalize `(x − 0.5) / 0.5` (mean = std = [0.5, 0.5, 0.5]) → range **[−1, 1]**.
 5. Channel-first CHW.
 
-**Parity gotcha:** Android `Bitmap.createScaledBitmap` is bilinear/nearest only — no bicubic.
-Exact bicubic parity requires a **native resampler** (e.g. bundled libswscale, or a custom
-bicubic kernel) or scores will drift per frame. Validated by `preprocess_golden`.
+**Parity gotcha (resampler):** Android `Bitmap.createScaledBitmap` is bilinear/nearest only —
+no bicubic. Exact bicubic parity requires a **native resampler** (e.g. bundled libswscale, or
+a custom bicubic kernel) or scores will drift per frame. Validated by `preprocess_golden`.
+
+**Parity gotcha (the full Python pixel path is lossy and aspect-preserving):** the Python
+reference does *not* feed raw decoded frames into this step. `services/video.py` runs
+`ffmpeg ... -vf "fps=N,scale='min(512,iw)':'min(512,ih)':force_original_aspect_ratio=decrease"
+-q:v 2` — i.e. it (a) downscales to fit within 512×512 **preserving aspect ratio** and then
+(b) re-encodes each frame to **lossy JPEG (q:v 2)** before SigLIP's own bicubic square resize.
+So there are two pixel-altering stages upstream of §5.3. Byte-for-byte replication of ffmpeg
+swscale + JPEG q:v 2 on Android is impractical. Therefore parity is defined in **two layers**:
+
+- **Model-math parity (must be exact, gated):** generate `preprocess_golden` and
+  `scores_golden` by feeding **identical lossless frames** (e.g. pre-extracted PNGs) through
+  *both* the Python `__call__`-equivalent (bicubic stretch → normalize) and the Android
+  pipeline. This isolates and locks the tensor + model math from frame-decode noise.
+- **End-to-end decode parity (documented tolerance, not exact):** the Android `FrameSampler`
+  (§5.4) decodes via Media3, not ffmpeg+JPEG, so end-to-end scores carry a documented,
+  measured tolerance band. Recommendation (open item, §12): for the cleanest contract, make
+  the *reference* path lossless too — extract frames as PNG and drop the 512 pre-scale — and
+  if the goal is to match the *current* lossy Python pipeline, replicate the 512
+  aspect-preserving pre-scale + a JPEG round-trip on-device and widen tolerance accordingly.
+  The `FramePipelineSpec` (§5.0) records which choice is in force.
 
 ### 5.4 Frame extraction
 - Use **Media3 `androidx.media3.inspector.frame.FrameExtractor`** (media3-inspector,
-  stable ≥ 1.9.0) — Google's replacement for `MediaMetadataRetriever`.
+  ≥ 1.9.0) — Google's replacement for `MediaMetadataRetriever`.
 - Sample at `fps = 1.0`; `approx_timestamp_seconds = sample_index / fps` (matches Python).
 - Cap at `max_frames = 300`.
 - Do **not** use `MediaMetadataRetriever.getScaledFrameAtTime` (keyframe-snapping +
   slow) or `ffmpeg-kit` (retired, binaries pulled from Maven Central 2025-04).
 - Fall back to `MediaExtractor` + `MediaCodec` + OpenGL only if `FrameExtractor` is too slow.
+
+**Caveats to handle explicitly (ffmpeg masks these; Media3 does not):**
+- `FrameExtractor` is `@UnstableApi` — pin the Media3 version and wrap it behind our own
+  `FrameSampler` interface so an API break is contained to one class.
+- It is **single-threaded per instance** — for a 300-frame benchmark, decode sequentially on
+  one worker (the cost is part of what we measure) or shard across instances deliberately.
+- **Rotation:** apply the video's rotation metadata so portrait clips aren't scored sideways
+  (ffmpeg auto-applies display matrix; Media3 must be told).
+- **Color:** handle SDR vs **HDR** (tone-map to SDR), color **range** (limited vs full), and
+  color space so decoded RGB matches the reference. Record the chosen policy in
+  `FramePipelineSpec` (§5.0).
+- These decode differences are exactly why end-to-end parity is a documented tolerance, not
+  byte-exact (§5.3).
 
 ### 5.5 Inference runner & benchmark
 - Vision: batch frames through `vision_model.onnx` (batch size configurable, default 32 like
@@ -186,7 +257,8 @@ bicubic kernel) or scores will drift per frame. Validated by `preprocess_golden`
 - Text: run `text_model.onnx` once over the label batch.
 - Build `[F × L]` cosine + confidence matrices per the §2 contract.
 - Metrics per (model, backend): model-load ms, total inference ms, ms/frame, frames/sec,
-  actual backend, fallback reason, peak memory (best-effort).
+  peak memory (best-effort), plus the `BackendCapabilityReport` (§5.0) — actual EP, **node
+  coverage** (% delegated vs CPU-fallback from ORT profiling), and fallback reason.
 
 ### 5.6 Scoring port
 Port the Python aggregation semantics 1:1, with unit tests mirroring `tests/test_scoring.py`:
@@ -216,7 +288,8 @@ Use the `mobile-android-design` skill during implementation.
   mode extras — `max`: peak-frame thumbnail + timestamp; `temporal`: timeline line chart +
   segment list + label summaries; `contrast`: verdict banner + group scores + dominant label.
 - **Benchmark panel:** per-backend table (load / total / ms-per-frame / fps) with **actual
-  backend used + fallback reason**; cross-model comparison view.
+  backend used + node coverage % + fallback reason** (from `BackendCapabilityReport`); GPU/NPU
+  rows badged **experimental**; cross-model comparison view.
 
 ---
 
@@ -237,12 +310,18 @@ pick model → pick backend → pick video + labels (+ mode options)
 
 ## 8. Parity validation (acceptance gate)
 
-Instrumented (on-device) + unit tests:
-1. **Tokenizer** — byte-exact `text → input_ids` vs `tokenizer_golden.json`.
-2. **Preprocess** — CHW tensor within tolerance vs `preprocess_golden` (validates bicubic).
-3. **End-to-end** — fp32 cosine + confidence within tolerance vs `scores_golden.json`.
-4. **Aggregation** — Kotlin unit tests ported from `tests/test_scoring.py`.
-5. **fp16 models** — validated empirically against their fp32 reference (cosine-sim drift
+Two-layer parity (§5.3): **model-math = exact/gated**, **end-to-end decode = documented
+tolerance**. Instrumented (on-device) + unit tests:
+1. **Tokenizer** — byte-exact `text → input_ids` vs `tokenizer_golden.json` (from `AutoProcessor`).
+2. **Preprocess (model-math layer)** — CHW tensor within tolerance vs `preprocess_golden`,
+   built from **lossless** frames through both pipelines (validates the bicubic resampler,
+   isolated from decode noise).
+3. **End-to-end (model-math layer)** — fp32 cosine + confidence within tolerance vs
+   `scores_golden.json`, also from lossless frames.
+4. **End-to-end (decode layer)** — measured tolerance band for Media3-decoded frames vs the
+   ffmpeg+JPEG reference; documented, not gated to byte-exactness.
+5. **Aggregation** — Kotlin unit tests ported from `tests/test_scoring.py`.
+6. **fp16 models** — validated empirically against their fp32 reference (cosine-sim drift
    within tolerance); hybrid-fp32 sensitive layers if drift is excessive.
 
 ---
@@ -282,6 +361,13 @@ no two large models resident simultaneously.
    `transformers`; CI gate on golden `(text → input_ids)` set; regenerate on bump.
 6. **NNAPI EP deprecation** — building the GPU/NPU attempt on NNAPI is legacy. *Mitigation:*
    it's only the best-effort leg; CPU/XNNPACK is the durable baseline.
+7. **Upstream pixel-path mismatch** — Python pre-scales to 512 (aspect-preserving) + lossy
+   JPEG before SigLIP resize; Media3 decode differs. *Mitigation:* two-layer parity (§5.3,
+   §8) — exact model-math gate on lossless frames; documented tolerance for decode; record
+   the chosen pre-scale/JPEG policy in `FramePipelineSpec`.
+8. **Media3 `FrameExtractor` is `@UnstableApi` + single-threaded + color/rotation pitfalls.**
+   *Mitigation:* pin Media3, wrap behind our `FrameSampler` interface, handle rotation /
+   color-range / SDR-HDR explicitly (§5.4).
 
 ---
 
@@ -292,3 +378,7 @@ no two large models resident simultaneously.
   future GPU-delegate attempt.
 - Whether to ship fp16 for base/large by default or keep fp32 as the shipped precision with
   fp16 as a benchmark toggle.
+- **Frame-pipeline parity policy** (§5.3): match the *current* lossy Python path (replicate
+  512 aspect-preserving pre-scale + JPEG round-trip, wider tolerance) **or** define a clean
+  lossless reference (PNG, no pre-scale) and update the Python side to match. Decide before
+  building `FrameSampler`; record in `FramePipelineSpec`.
