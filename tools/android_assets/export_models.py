@@ -112,3 +112,57 @@ def acquire_onnx(hf_repo: str, precision: str, out_dir: Path) -> dict:
         return {"vision": vision, "text": text, "tokenizer": tok,
                 "vision_data": v_data, "text_data": t_data,
                 "source": "optimum", "source_repo": "", "source_revision": ""}
+
+
+EXTERNAL_DATA_THRESHOLD = 2_000_000_000  # under the 2 GiB protobuf limit
+
+
+def to_fp16(model):
+    import onnx
+    from onnxconverter_common import float16
+    return float16.convert_float_to_float16(model, keep_io_types=True)
+
+
+def _exceeds_protobuf_limit(model) -> bool:
+    """True if the model would exceed the 2 GB protobuf serialization ceiling.
+
+    `ModelProto.ByteSize()` itself RAISES `ValueError(... exceeds maximum protobuf size of
+    2GB ...)` for >2 GB models — so catch that and treat it as 'too big' rather than
+    serialize-then-compare (which can never return True for the models that need external data).
+    """
+    try:
+        return model.ByteSize() >= EXTERNAL_DATA_THRESHOLD
+    except ValueError:
+        return True
+
+
+def save_onnx(model, path, force_external: bool | None = None) -> None:
+    """Save ONNX; externalize tensors when the model is large (or forced).
+
+    NOTE: only the **optimum-fallback** path serializes a ModelProto. The normal prebuilt path
+    relocates files by copy (see `_place`) and never round-trips through the 2 GB serializer.
+    """
+    import onnx
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    use_external = force_external if force_external is not None else _exceeds_protobuf_limit(model)
+    if use_external:
+        # onnx only externalizes tensors with raw_data; convert non-raw initializers first.
+        from onnx import numpy_helper
+        for init in model.graph.initializer:
+            if not init.raw_data:
+                arr = numpy_helper.to_array(init)
+                init.raw_data = arr.tobytes()
+                for field in ("float_data", "int32_data", "int64_data", "double_data",
+                              "uint64_data"):
+                    init.ClearField(field)
+        onnx.save_model(
+            model, str(path),
+            save_as_external_data=True,
+            all_tensors_to_one_file=True,
+            location=path.name + "_data",
+            size_threshold=0,
+        )
+    else:
+        onnx.save_model(model, str(path))
