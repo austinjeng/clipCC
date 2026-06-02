@@ -229,11 +229,17 @@ swscale + JPEG q:v 2 on Android is impractical. Therefore parity is defined in *
   pipeline. This isolates and locks the tensor + model math from frame-decode noise.
 - **End-to-end decode parity (documented tolerance, not exact):** the Android `FrameSampler`
   (§5.4) decodes via Media3, not ffmpeg+JPEG, so end-to-end scores carry a documented,
-  measured tolerance band. Recommendation (open item, §12): for the cleanest contract, make
-  the *reference* path lossless too — extract frames as PNG and drop the 512 pre-scale — and
-  if the goal is to match the *current* lossy Python pipeline, replicate the 512
-  aspect-preserving pre-scale + a JPEG round-trip on-device and widen tolerance accordingly.
-  The `FramePipelineSpec` (§5.0) records which choice is in force.
+  measured tolerance band.
+
+**DECISION (locked): lossless reference pipeline.** The parity contract is defined against a
+**lossless** reference — frames extracted as **PNG with no 512 pre-scale**, fed straight into
+SigLIP bicubic stretch-to-square + normalize. The fixture-generation script (host) uses this
+lossless path; the Android `FrameSampler` decodes via Media3 and resizes bicubic with **no
+pre-scale and no JPEG round-trip**. We do **not** replicate the production `video.py` lossy
+ffmpeg+JPEG path. Changing the production `video.py` to also drop the pre-scale/JPEG is
+**out of scope** for this app (optional future cleanup on the Python side).
+`FramePipelineSpec` records: `prescale=none`, `intermediate_codec=none (lossless)`,
+`resample=bicubic`.
 
 ### 5.4 Frame extraction
 - Use **Media3 `androidx.media3.inspector.frame.FrameExtractor`** (media3-inspector,
@@ -440,10 +446,8 @@ single unknown:
   future GPU-delegate attempt.
 - Whether to ship fp16 for base/large by default or keep fp32 as the shipped precision with
   fp16 as a benchmark toggle.
-- **Frame-pipeline parity policy** (§5.3): match the *current* lossy Python path (replicate
-  512 aspect-preserving pre-scale + JPEG round-trip, wider tolerance) **or** define a clean
-  lossless reference (PNG, no pre-scale) and update the Python side to match. Decide before
-  building `FrameSampler`; record in `FramePipelineSpec`.
+- ~~**Frame-pipeline parity policy** (§5.3)~~ — **DECIDED: lossless reference** (PNG, no
+  pre-scale, bicubic; production `video.py` unchanged, out of scope). See §5.3.
 
 **Planning decisions to settle in `writing-plans` (before the relevant phase):**
 - **Project layout:** where the Android project lives (new repo vs `android/` dir in this
