@@ -199,13 +199,13 @@ defaults requires it. Recorded so the boundary is explicit, not silently incompl
   processor behavior the Rust library does *not* do — `truncation=True`,
   `padding="max_length"`, `max_length=64`, pad id = 0 — is implemented in Kotlin per
   `TokenizerSpec` (§5.0).
-- **UNRESOLVED — where lowercasing happens (Phase 0 spike, §10).** transformers v5 *source*
-  (`tokenization_siglip2.py`) defines the normalizer as `Sequence([Lowercase(), Replace])`,
-  but inspection of a *shipped* `tokenizer.json` artifact showed only space-replacement, with
-  `do_lower_case` in `tokenizer_config.json` (slow-path-only). If the on-hub artifact has no
-  `Lowercase` normalizer, the Rust `tokenizers` path will **not** lowercase and we must apply
-  it ourselves. Do **not** assume either way — the Phase 0 tokenizer spike resolves this with
-  a mixed-case golden set (`Car` vs `car`) against the exact pinned `AutoProcessor`.
+- **RESOLVED (Phase 0 Spike 0a, 2026-06-03):** SigLIP2's fast tokenizer is **case-sensitive**.
+  The shipped `tokenizer.json` has **no** `Lowercase` normalizer, and the default
+  `AutoProcessor` (`GemmaTokenizerFast`) does **not** lowercase — `AutoProcessor("Car")`,
+  `("car")`, `("CAR")` produce distinct ids, each byte-matching `rust.encode(text)`. So
+  `lowercase_applied_by = "tokenizer_json"`: **the Android wrapper must NOT lowercase labels**
+  (doing so would break parity with the Python reference, which is case-sensitive —
+  cf. `app/models/siglip2_model.py:82`). The Kotlin wrapper only does truncate-to-64 + pad-0.
 - Android build gotcha: `pthread_cond_clockwait` — fix with
   `CXXFLAGS='-lpthread -D__ANDROID_API__=<level>'`, API ≥ 21.
 - **Gate:** instrumented test asserts byte-exact equality against `tokenizer_golden.json`
