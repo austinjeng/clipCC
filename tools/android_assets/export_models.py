@@ -168,9 +168,11 @@ def save_onnx(model, path, force_external: bool | None = None) -> None:
         onnx.save_model(model, str(path))
 
 
-# Set by Spike 0a (Task 7). "unknown" until then; "tokenizer_json" if the Rust normalizer
-# already lowercases, else "kotlin_wrapper" (Android must lowercase before encoding).
-LOWERCASE_APPLIED_BY = "kotlin_wrapper"
+# Set by Spike 0a (Task 7). Decision is evidence-driven: "tokenizer_json" if rust.encode(text)
+# byte-matches AutoProcessor (Android must NOT lowercase — SigLIP2's fast tokenizer is
+# case-sensitive), else "kotlin_wrapper" (Android must .lowercase() before encoding).
+# Resolved 2026-06-03: tokenizer_json (case-sensitive; matches_raw=True, parity_ok=True).
+LOWERCASE_APPLIED_BY = "tokenizer_json"
 
 
 def extract_logit_params(model) -> tuple[float, float]:
