@@ -5,8 +5,13 @@ Also load memory: `clipcc-android-port` + `clipcc-android-review-discipline`.
 
 ## Status (2026-06-03)
 - **Phase 0 COMPLETE** (assets + spikes 0a–0d) — see `phase0-spike-results.md`.
-- **Plan 1 written + adversarially verified.** Execution started; **Task 1 (tokenizer JNI) DONE — gate passed**: `libhftokenizer.so` loads on the Pixel 7a and tokenization is byte-exact vs the Python golden.
-- **Remaining: Plan 1 Tasks 2–7.** Next action = **Task 2 (Resampler.kt + ResamplerTest, pure JVM)**.
+- **Plan 1 (headless engine) COMPLETE — all 7 tasks done, all gates passed on Pixel 7a.** See `phase1-report.md`.
+  Acceptance gate (Task 7 end-to-end): cosine_max **9.09e-5** (≤0.01), confidence_max **6.14e-7** (≤0.02), **0 best-match flips**.
+  Full suite green offline: unit 31/31 + 4 instrumented engine classes.
+- **TWO plan resolved-facts were WRONG and corrected (see `phase1-report.md` ERRATA):**
+  (1) embedding = ONNX `pooler_output` selected BY NAME, not `res[0]` (=`last_hidden_state`); host cosine match to 1.96e-7.
+  (2) XNNPACK EP collapses the symbolic batch dim to 1 for BOTH towers → run batch=1 per item (vision per-frame, text per-label); CPU EP batches fine. ONNX dep moved to `implementation`; OrtTower/Engine live in `src/main`.
+- **Next: Plan 2 (benchmark)** — plus optional housekeeping: delete the three Phase-0 `androidTest/.../spike/` test classes.
 
 ## Toolchain (already installed — do NOT reinstall)
 - Rust 1.96 + `cargo-ndk` 4.1.2 + targets `aarch64-linux-android`, `x86_64-linux-android` (rustup binary in `~/.cargo/bin`; `~/.bash_profile` is NOT writable, so set PATH explicitly).
@@ -45,7 +50,7 @@ cd /Users/austin/AndroidStudioProjects/ClipCC
 - Tokenizer **case-sensitive** → Android must NOT lowercase (proven byte-exact).
 - Resize = **PIL antialiased bilinear** (resample=2). `Bitmap.createScaledBitmap` is NOT acceptable (no antialias prefilter) → Task 2 ports a separable-triangle resampler.
 - `rewind() as FloatBuffer/LongBuffer` crashes minSdk<33 → cast receiver to `java.nio.Buffer`, rewind as a statement.
-- ORT batched output is correct (the `{1,32,1152}` shape-reuse log is benign). so400m: peak ~3.19 GB, batch ≤ 8, ~16 s/frame; Engine encodes text → releases text session → opens vision.
+- ORT: embedding = `pooler_output` (BY NAME), NOT `res[0]`. **XNNPACK EP collapses dynamic batch→1 for BOTH towers** → run batch=1 per item (CPU EP batches fine). so400m: peak ~3.19 GB, ~16 s/frame; Engine encodes text → releases text session → opens vision. (CORRECTED — see `phase1-report.md` ERRATA; supersedes the old "batched output is correct / {1,32,1152} benign" note.)
 - "Verified-correct, do not refactor" list is in the plan's resolved-facts section.
 
 ## Acceptance gate (Task 7)
