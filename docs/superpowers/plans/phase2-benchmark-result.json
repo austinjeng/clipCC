@@ -1,0 +1,548 @@
+{
+  "prep": [
+    {
+      "model": "siglip2-base-patch16-256",
+      "res": 256,
+      "frames": 7,
+      "decodeMs": 2303,
+      "preprocessMs": 584
+    },
+    {
+      "model": "siglip2-base-patch16-384",
+      "res": 384,
+      "frames": 7,
+      "decodeMs": 2148,
+      "preprocessMs": 844
+    },
+    {
+      "model": "siglip2-large-patch16-384",
+      "res": 384,
+      "frames": 7,
+      "decodeMs": 2642,
+      "preprocessMs": 858
+    },
+    {
+      "model": "siglip2-so400m-patch14-384",
+      "res": 384,
+      "frames": 4,
+      "decodeMs": 2187,
+      "preprocessMs": 610
+    }
+  ],
+  "runs": [
+    {
+      "model": "siglip2-base-patch16-256",
+      "backend": "CPU_XNNPACK",
+      "batch": 1,
+      "loadMs": 1152,
+      "textMs": 6144,
+      "visionMsMedian": 16606,
+      "visionMsMin": 16554,
+      "visionMsMax": 16612,
+      "scoringMs": 5,
+      "msPerFrame": 2372.286,
+      "fps": 0.422,
+      "endToEndMsSynthetic": 25642,
+      "intraOpThreads": 4,
+      "thermal": 0,
+      "thermalThrottled": false,
+      "batteryPct": 100,
+      "runOrder": 0,
+      "media3": "1.10.1"
+    },
+    {
+      "model": "siglip2-base-patch16-256",
+      "backend": "CPU_EP",
+      "batch": 16,
+      "loadMs": 1169,
+      "textMs": 6622,
+      "visionMsMedian": 8417,
+      "visionMsMin": 8344,
+      "visionMsMax": 8604,
+      "scoringMs": 3,
+      "msPerFrame": 1202.429,
+      "fps": 0.832,
+      "endToEndMsSynthetic": 17929,
+      "intraOpThreads": 4,
+      "thermal": 0,
+      "thermalThrottled": false,
+      "batteryPct": 100,
+      "runOrder": 1,
+      "media3": "1.10.1"
+    },
+    {
+      "model": "siglip2-base-patch16-384",
+      "backend": "CPU_XNNPACK",
+      "batch": 1,
+      "loadMs": 884,
+      "textMs": 5951,
+      "visionMsMedian": 38637,
+      "visionMsMin": 37980,
+      "visionMsMax": 39512,
+      "scoringMs": 4,
+      "msPerFrame": 5519.571,
+      "fps": 0.181,
+      "endToEndMsSynthetic": 47584,
+      "intraOpThreads": 4,
+      "thermal": 1,
+      "thermalThrottled": false,
+      "batteryPct": 100,
+      "runOrder": 0,
+      "media3": "1.10.1"
+    },
+    {
+      "model": "siglip2-base-patch16-384",
+      "backend": "CPU_EP",
+      "batch": 16,
+      "loadMs": 1196,
+      "textMs": 6003,
+      "visionMsMedian": 20763,
+      "visionMsMin": 20364,
+      "visionMsMax": 21212,
+      "scoringMs": 3,
+      "msPerFrame": 2966.143,
+      "fps": 0.337,
+      "endToEndMsSynthetic": 29761,
+      "intraOpThreads": 4,
+      "thermal": 1,
+      "thermalThrottled": false,
+      "batteryPct": 100,
+      "runOrder": 1,
+      "media3": "1.10.1"
+    },
+    {
+      "model": "siglip2-large-patch16-384",
+      "backend": "CPU_XNNPACK",
+      "batch": 1,
+      "loadMs": 1987,
+      "textMs": 8755,
+      "visionMsMedian": 74748,
+      "visionMsMin": 74684,
+      "visionMsMax": 74996,
+      "scoringMs": 6,
+      "msPerFrame": 10678.286,
+      "fps": 0.094,
+      "endToEndMsSynthetic": 87009,
+      "intraOpThreads": 4,
+      "thermal": 1,
+      "thermalThrottled": false,
+      "batteryPct": 100,
+      "runOrder": 0,
+      "media3": "1.10.1"
+    },
+    {
+      "model": "siglip2-large-patch16-384",
+      "backend": "CPU_EP",
+      "batch": 8,
+      "loadMs": 4201,
+      "textMs": 12302,
+      "visionMsMedian": 78255,
+      "visionMsMin": 78111,
+      "visionMsMax": 78987,
+      "scoringMs": 3,
+      "msPerFrame": 11179.286,
+      "fps": 0.089,
+      "endToEndMsSynthetic": 94060,
+      "intraOpThreads": 4,
+      "thermal": 1,
+      "thermalThrottled": false,
+      "batteryPct": 100,
+      "runOrder": 1,
+      "media3": "1.10.1"
+    },
+    {
+      "model": "siglip2-so400m-patch14-384",
+      "backend": "CPU_XNNPACK",
+      "batch": 1,
+      "loadMs": 2765,
+      "textMs": 10678,
+      "visionMsMedian": 71518,
+      "visionMsMin": 71290,
+      "visionMsMax": 71688,
+      "scoringMs": 5,
+      "msPerFrame": 17879.5,
+      "fps": 0.056,
+      "endToEndMsSynthetic": 84998,
+      "intraOpThreads": 4,
+      "thermal": 1,
+      "thermalThrottled": false,
+      "batteryPct": 100,
+      "runOrder": 0,
+      "media3": "1.10.1"
+    },
+    {
+      "model": "siglip2-so400m-patch14-384",
+      "backend": "CPU_EP",
+      "batch": 4,
+      "loadMs": 5740,
+      "textMs": 15035,
+      "visionMsMedian": 76758,
+      "visionMsMin": 76533,
+      "visionMsMax": 76893,
+      "scoringMs": 2,
+      "msPerFrame": 19189.5,
+      "fps": 0.052,
+      "endToEndMsSynthetic": 94592,
+      "intraOpThreads": 4,
+      "thermal": 1,
+      "thermalThrottled": false,
+      "batteryPct": 100,
+      "runOrder": 1,
+      "media3": "1.10.1"
+    }
+  ],
+  "capabilities": [
+    {
+      "model": "siglip2-base-patch16-256",
+      "tower": "vision",
+      "backend": "CPU_XNNPACK",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 760,
+      "providerCounts": {
+        "CPUExecutionProvider": 670,
+        "XnnpackExecutionProvider": 90
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 88.16,
+        "XnnpackExecutionProvider": 11.84
+      }
+    },
+    {
+      "model": "siglip2-base-patch16-256",
+      "tower": "vision",
+      "backend": "CPU_EP",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 475,
+      "providerCounts": {
+        "CPUExecutionProvider": 475
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 100.0
+      }
+    },
+    {
+      "model": "siglip2-base-patch16-256",
+      "tower": "vision",
+      "backend": "NNAPI_DEFAULT",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 475,
+      "providerCounts": {
+        "CPUExecutionProvider": 475
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 100.0
+      }
+    },
+    {
+      "model": "siglip2-base-patch16-256",
+      "tower": "vision",
+      "backend": "NNAPI_CPU_DISABLED",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 475,
+      "providerCounts": {
+        "CPUExecutionProvider": 475
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 100.0
+      }
+    },
+    {
+      "model": "siglip2-base-patch16-256",
+      "tower": "text",
+      "backend": "CPU_XNNPACK",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 549,
+      "providerCounts": {
+        "CPUExecutionProvider": 476,
+        "XnnpackExecutionProvider": 73
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 86.7,
+        "XnnpackExecutionProvider": 13.3
+      }
+    },
+    {
+      "model": "siglip2-base-patch16-256",
+      "tower": "text",
+      "backend": "CPU_EP",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 512,
+      "providerCounts": {
+        "CPUExecutionProvider": 512
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 100.0
+      }
+    },
+    {
+      "model": "siglip2-base-patch16-384",
+      "tower": "vision",
+      "backend": "CPU_XNNPACK",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 760,
+      "providerCounts": {
+        "CPUExecutionProvider": 670,
+        "XnnpackExecutionProvider": 90
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 88.16,
+        "XnnpackExecutionProvider": 11.84
+      }
+    },
+    {
+      "model": "siglip2-base-patch16-384",
+      "tower": "vision",
+      "backend": "CPU_EP",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 475,
+      "providerCounts": {
+        "CPUExecutionProvider": 475
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 100.0
+      }
+    },
+    {
+      "model": "siglip2-base-patch16-384",
+      "tower": "vision",
+      "backend": "NNAPI_DEFAULT",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 475,
+      "providerCounts": {
+        "CPUExecutionProvider": 475
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 100.0
+      }
+    },
+    {
+      "model": "siglip2-base-patch16-384",
+      "tower": "vision",
+      "backend": "NNAPI_CPU_DISABLED",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 475,
+      "providerCounts": {
+        "CPUExecutionProvider": 475
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 100.0
+      }
+    },
+    {
+      "model": "siglip2-base-patch16-384",
+      "tower": "text",
+      "backend": "CPU_XNNPACK",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 549,
+      "providerCounts": {
+        "CPUExecutionProvider": 476,
+        "XnnpackExecutionProvider": 73
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 86.7,
+        "XnnpackExecutionProvider": 13.3
+      }
+    },
+    {
+      "model": "siglip2-base-patch16-384",
+      "tower": "text",
+      "backend": "CPU_EP",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 512,
+      "providerCounts": {
+        "CPUExecutionProvider": 512
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 100.0
+      }
+    },
+    {
+      "model": "siglip2-large-patch16-384",
+      "tower": "vision",
+      "backend": "CPU_XNNPACK",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 1871,
+      "providerCounts": {
+        "CPUExecutionProvider": 1697,
+        "XnnpackExecutionProvider": 174
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 90.7,
+        "XnnpackExecutionProvider": 9.3
+      }
+    },
+    {
+      "model": "siglip2-large-patch16-384",
+      "tower": "vision",
+      "backend": "CPU_EP",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 2072,
+      "providerCounts": {
+        "CPUExecutionProvider": 2072
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 100.0
+      }
+    },
+    {
+      "model": "siglip2-large-patch16-384",
+      "tower": "vision",
+      "backend": "NNAPI_DEFAULT",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 2072,
+      "providerCounts": {
+        "CPUExecutionProvider": 2072
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 100.0
+      }
+    },
+    {
+      "model": "siglip2-large-patch16-384",
+      "tower": "vision",
+      "backend": "NNAPI_CPU_DISABLED",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 2072,
+      "providerCounts": {
+        "CPUExecutionProvider": 2072
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 100.0
+      }
+    },
+    {
+      "model": "siglip2-large-patch16-384",
+      "tower": "text",
+      "backend": "CPU_XNNPACK",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 1923,
+      "providerCounts": {
+        "CPUExecutionProvider": 1778,
+        "XnnpackExecutionProvider": 145
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 92.46,
+        "XnnpackExecutionProvider": 7.54
+      }
+    },
+    {
+      "model": "siglip2-large-patch16-384",
+      "tower": "text",
+      "backend": "CPU_EP",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 2163,
+      "providerCounts": {
+        "CPUExecutionProvider": 2163
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 100.0
+      }
+    },
+    {
+      "model": "siglip2-so400m-patch14-384",
+      "tower": "vision",
+      "backend": "CPU_XNNPACK",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 2093,
+      "providerCounts": {
+        "CPUExecutionProvider": 1898,
+        "XnnpackExecutionProvider": 195
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 90.68,
+        "XnnpackExecutionProvider": 9.32
+      }
+    },
+    {
+      "model": "siglip2-so400m-patch14-384",
+      "tower": "vision",
+      "backend": "CPU_EP",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 2318,
+      "providerCounts": {
+        "CPUExecutionProvider": 2318
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 100.0
+      }
+    },
+    {
+      "model": "siglip2-so400m-patch14-384",
+      "tower": "vision",
+      "backend": "NNAPI_DEFAULT",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 2318,
+      "providerCounts": {
+        "CPUExecutionProvider": 2318
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 100.0
+      }
+    },
+    {
+      "model": "siglip2-so400m-patch14-384",
+      "tower": "vision",
+      "backend": "NNAPI_CPU_DISABLED",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 2318,
+      "providerCounts": {
+        "CPUExecutionProvider": 2318
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 100.0
+      }
+    },
+    {
+      "model": "siglip2-so400m-patch14-384",
+      "tower": "text",
+      "backend": "CPU_XNNPACK",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 2160,
+      "providerCounts": {
+        "CPUExecutionProvider": 1997,
+        "XnnpackExecutionProvider": 163
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 92.45,
+        "XnnpackExecutionProvider": 7.55
+      }
+    },
+    {
+      "model": "siglip2-so400m-patch14-384",
+      "tower": "text",
+      "backend": "CPU_EP",
+      "addEp": "ok",
+      "sessionCreate": "ok",
+      "totalNodes": 2430,
+      "providerCounts": {
+        "CPUExecutionProvider": 2430
+      },
+      "delegatedPct": {
+        "CPUExecutionProvider": 100.0
+      }
+    }
+  ]
+}

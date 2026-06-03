@@ -503,11 +503,13 @@ package com.example.clipcc.engine
 
 import ai.onnxruntime.OrtEnvironment
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.nio.Buffer
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
+import java.util.Locale
 
 /** Per-(model,tower,backend) capability evidence from an UNTIMED, profiling-ON one-frame run. */
 data class BackendCapabilityReport(
@@ -522,9 +524,10 @@ data class BackendCapabilityReport(
 ) {
     fun toJson(): String {
         val pc = providerCounts.entries.joinToString(",") { "\"${it.key}\":${it.value}" }
-        val pct = delegatedPctByProvider.entries.joinToString(",") { "\"${it.key}\":${"%.2f".format(it.value)}" }
-        return """{"model":"$modelId","tower":"$tower","backend":"$backend","addEp":"$addEpOutcome",""" +
-               """"sessionCreate":"$sessionCreateOutcome","totalNodes":$totalNodes,""" +
+        val pct = delegatedPctByProvider.entries.joinToString(",") { "\"${it.key}\":${String.format(Locale.US, "%.2f", it.value)}" }
+        // JSONObject.quote() adds surrounding quotes + escapes — addEp/sessionCreate may hold raw exception text.
+        return """{"model":"$modelId","tower":"$tower","backend":"$backend","addEp":${JSONObject.quote(addEpOutcome)},""" +
+               """"sessionCreate":${JSONObject.quote(sessionCreateOutcome)},"totalNodes":$totalNodes,""" +
                """"providerCounts":{$pc},"delegatedPct":{$pct}}"""
     }
 }
@@ -877,17 +880,19 @@ class Benchmark(private val context: Context, private val env: OrtEnvironment) {
         val tLoadV = now()
         OrtTower.open("$modelDir/${manifest.visionFile}", env, backend, cfg).use { v ->
             val loadMs = msSince(tLoadV)
-            fun pixelBuf(): java.nio.FloatBuffer {
+            // Build the pixel buffer ONCE (outside the timed region) and reuse it: encodeVision rewinds
+            // its input and reads via absolute get(), so reuse is safe. Keeps the alloc+fill out of vision_ms.
+            val pix = run {
                 val b = java.nio.ByteBuffer.allocateDirect(frames * per * 4)
                     .order(java.nio.ByteOrder.nativeOrder()).asFloatBuffer()
-                b.put(prep.data); (b as java.nio.Buffer).rewind(); return b
+                b.put(prep.data); (b as java.nio.Buffer).rewind(); b
             }
-            v.encodeVision(pixelBuf(), frames, res, visionBatch)  // warm-up (discarded)
+            v.encodeVision(pix, frames, res, visionBatch)  // warm-up (discarded)
             val times = LongArray(3)
             lateinit var img: Array<FloatArray>
             for (r in 0 until 3) {
                 val t0 = now()
-                img = v.encodeVision(pixelBuf(), frames, res, visionBatch)
+                img = v.encodeVision(pix, frames, res, visionBatch)
                 times[r] = msSince(t0)
                 Thread.sleep(1500)  // cool-down between timed runs
             }
@@ -977,7 +982,7 @@ Append to the `Benchmark` class:
         fun run(r: TimedRun) = """{"model":"${r.modelId}","backend":"${r.backend}","batch":${r.effectiveBatch},""" +
             """"loadMs":${r.loadMs},"textMs":${r.textMs},"visionMsMedian":${r.visionMsMedian},""" +
             """"visionMsMin":${r.visionMsMin},"visionMsMax":${r.visionMsMax},"scoringMs":${r.scoringMs},""" +
-            """"msPerFrame":${"%.3f".format(r.msPerFrame)},"fps":${"%.3f".format(r.fps)},""" +
+            """"msPerFrame":${String.format(java.util.Locale.US, "%.3f", r.msPerFrame)},"fps":${String.format(java.util.Locale.US, "%.3f", r.fps)},""" +
             """"endToEndMsSynthetic":${r.endToEndMsSynthetic},"intraOpThreads":${r.config.intraOpThreads},""" +
             """"thermal":${r.meta.thermalStatus},"thermalThrottled":${r.meta.thermalThrottled},""" +
             """"batteryPct":${r.meta.batteryPct},"runOrder":${r.meta.runOrder},"media3":"${r.meta.media3Version}"}"""
@@ -1047,6 +1052,14 @@ NOTE on retrieval path: `getExternalFilesDir(null)` maps to `/sdcard/Android/dat
 ---
 
 ## Task 7: Full benchmark matrix + acceptance gate + report
+
+> ⚠️ **EXECUTED DESIGN DIFFERS (see `phase2-report.md`).** The single-process `BenchmarkMatrixTest`
+> below OOM-crashes on so400m (`shortMsg=Process crashed`) after ~30 min of accumulated native ORT
+> memory — a native death no try/catch can catch. The shipped test instead benchmarks **one model per
+> `am instrument` invocation** (`@Test bench_one_model`, `-e model <id>`, fresh process), writes a
+> per-model `benchmark_<id>.json` (via `Benchmark.writeResults(..., fileName)` — a 4-arg overload), and a
+> host driver runs it 4× + merges. Results merged to `phase2-benchmark-result.json`; gate MET (prep=4,
+> runs=8, capabilities=24). The blocks below are the original (pre-OOM) design, kept for context.
 
 **Files:**
 - Create: `app/src/androidTest/java/com/example/clipcc/engine/BenchmarkMatrixTest.kt`
