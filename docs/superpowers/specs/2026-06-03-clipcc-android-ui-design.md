@@ -1,11 +1,32 @@
 # clipCC-Android — Plan 3 (Compose UI) Design
 
 **Date:** 2026-06-03
-**Status:** Approved design (pre-plan)
+**Status:** Approved design (pre-plan) — **Revision 2** (post external review; all P1/P2/P3 findings folded in)
 **Parent spec:** `docs/superpowers/specs/2026-06-02-clipcc-android-design.md` (§6 UI, §10 phase 3)
 **Handoff:** `docs/superpowers/plans/phase3-handoff.md`
 **Target device:** Pixel 7a (Tensor G2), Android 16 / API 36
 **Predecessors:** Plan 0 (assets/spikes) ✅ · Plan 1 (headless engine) ✅ · Plan 2 (benchmark harness) ✅
+
+---
+
+## 0. Project root, paths, and sync policy (read first)
+
+This design doc lives in the **host Python repo** (`/Users/austin/MITAC/clipCC`, git), but the code it
+describes lives in a **separate, non-git Android project**. To remove all path ambiguity:
+
+- **Android project root:** `/Users/austin/AndroidStudioProjects/ClipCC` — **not** under git ("commit"
+  there means *save the file*; there is no VCS).
+- **Gradle module:** `:app` · **package / namespace:** `com.example.clipcc` · **applicationId:**
+  `com.example.clipcc` · **minSdk 24 / target+compile 36**.
+- **Path convention in this spec:** every `app/src/...`, `assets/...`, or `engine/...` path is
+  **relative to the Android project root above**, *not* to the host repo. (The host repo's own `app/`
+  is the unrelated Python service — never a target here.)
+- **Sync / commit policy:**
+  - Design specs, plans, and phase reports → written under the **host repo** `docs/superpowers/` and
+    **committed to git** (this file included).
+  - Android source/asset changes → **saved** in the Android project (no git). Verification is by
+    build + test output, not by diff. Each subagent task records its touched files + test evidence in
+    the plan/report, mirroring Plans 1–2.
 
 ---
 
@@ -24,10 +45,13 @@ renders `phase2-benchmark-result.json` — captured data, not a live re-run.
 
 1. All four aggregation modes (`mean` / `max` / `temporal` / `contrast`) render correctly from real
    on-device engine output.
-2. The benchmark panel shows per-model/backend timings (load / vision / ms-per-frame / fps) + actual
-   backend + node-coverage % + experimental badges, from the captured `BackendCapabilityReport` data.
-3. A long run is cancellable and shows per-frame progress; the screen stays awake during a run.
-4. The UI reuses the existing engine unchanged except for two additive, parity-neutral touches (§7).
+2. The benchmark panel shows the CPU timed lanes (load / vision / ms-per-frame / fps) as rows and the
+   NNAPI lanes as **capability-only / not-timed** rows with node-coverage % + experimental badges,
+   from the captured data.
+3. A long run shows honest per-chunk progress, is cancellable at every stage checkpoint, displays an
+   ETA, and keeps the screen awake while running.
+4. The UI reuses the existing engine with only **additive, parity-neutral** touches (§7); all Plan-1/2
+   tests stay green.
 
 ---
 
@@ -37,20 +61,56 @@ renders `phase2-benchmark-result.json` — captured data, not a live re-run.
 |---|---|---|---|
 | 1 | UI emphasis | **Live classification is the star**; benchmark = read-only view of the JSON | Matches the Python web UI's spirit; benchmark data already captured in Plan 2 |
 | 2 | Model provisioning | **adb-push / local import; defer the §9 network downloader** | "adb-push sufficed" (Plan 2); downloader is a large orthogonal subsystem |
-| 3 | Charting | **Custom Compose Canvas** (no library) | Charts are simple (grouped bars + one timeline line); zero-dep; simplicity-first |
+| 3 | Charting | **Custom Compose Canvas** (no library), **separate stacked scales** | Charts are simple; zero-dep; confidence (0–1) and cosine (signed, small) need independent axes — dual-axis would distort |
 | 4 | Temporal/contrast defaults | **App-side `ScoringPolicy` constants; no schema-v2 bump** | These are model-*independent* policy constants; a per-model manifest bump would duplicate them 4× |
-| 5 | Run lifecycle | **ViewModel coroutine + keep-screen-on + cooperative cancel** | Fits a watched bench run; foreground service is over-engineering here |
+| 5 | Run lifecycle | **ViewModel coroutine + keep-screen-on + cooperative cancel; attended/foreground-only** | Fits a watched bench run; foreground service is out of scope (deferred with the downloader) |
 
 Decision 4 **retires the parent spec's "schema-v2 required in Plan 3" open item** (§5.0/§12): the
-deferred `ScoringPolicySpec` values (gap 2.0, min-dur 1.0, threshold 0.5, contrast defaults) are
-global policy constants, not per-model data, so they live in one Kotlin object instead of four
-manifests. The only genuinely per-model scoring values (`logit_scale` / `logit_bias`) are already in
-manifest v1.
+deferred `ScoringPolicySpec` *policy* values (gap 2.0, min-dur 1.0, threshold 0.5, contrast defaults)
+are global constants, not per-model data, so they live in one Kotlin object. The genuinely per-model
+values (`logit_scale`, `logit_bias`, `score_semantics`, per-file `sha256`/`bytes`) are **already in
+manifest v1** (verified against `manifest_base256.json`) — so no schema bump is needed, and §8 reads
+those existing fields rather than inventing new ones.
 
-Decision 1's honesty refinement to parent §6: the backend selector exposes the **real engine lanes**
-— **CPU·XNNPACK** (default), **CPU·EP** (batched), **NNAPI (experimental — 0 % delegated on Tensor
-G2)** — not the aspirational "CPU / GPU / NPU", because GPU/NPU don't exist as separate lanes on this
-device (verified Plans 0/2). Same attempt-and-report honesty as the benchmark.
+Decision 1's honesty refinement to parent §6: the backend selector exposes the **real engine lanes**,
+not the aspirational "CPU / GPU / NPU" (GPU/NPU don't exist as separate lanes on Tensor G2; verified
+Plans 0/2). See §5.1 / §2-backend-mapping below.
+
+**`engine/ScoringPolicy.kt` constants** (pinned to the exact Python sources; `ScoringPolicyTest`
+guards drift):
+
+```kotlin
+object ScoringPolicy {
+    const val THRESHOLD = 0.5             // temporal_policy.py SigLip2Policy.default_threshold
+    const val THRESHOLD_MODE = "absolute" // SigLip2Policy.threshold_mode
+    const val GAP_TOLERANCE = 2.0         // response.py ResolvedTemporalOptions default
+    const val MIN_DURATION = 1.0          // response.py ResolvedTemporalOptions default
+    const val CONTRAST_THRESHOLD = 0.15   // SigLip2Policy.contrast_default_threshold
+    const val CONTRAST_REDUCE = "mean"    // SigLip2Policy.contrast_default_reduction
+    val CONTRAST_REDUCE_MODES = listOf("mean", "top_k_mean", "max", "quantile")
+    const val SCORE_SEMANTICS = "siglip2_pairwise_sigmoid"
+    const val FPS = 1.0                   // services/video.py
+    const val MAX_FRAMES = 300            // services/video.py
+    const val VISION_CHUNK = 16           // §4.2 chunked encode (UI only; not a Python value)
+    val DEFAULT_LABELS = listOf(          // config.py default_labels
+        "texting while driving", "sleeping while driving", "eating while driving")
+}
+```
+
+### Backend mapping (resolves review P2-8)
+
+The engine `Backend` enum has four values; two of the NNAPI lanes are capability-probes, not live
+options. A `UiBackend` enum maps cleanly:
+
+| `UiBackend` (live options) | → engine `Backend` | Notes shown in UI |
+|---|---|---|
+| `CPU_XNNPACK` (default) | `CPU_XNNPACK` | per-frame; partial XNNPACK delegation |
+| `CPU_EP` | `CPU_EP` | batched ORT CPU EP |
+| `NNAPI` (experimental) | `NNAPI_DEFAULT` | "experimental — 0 % delegated on Tensor G2" |
+
+`NNAPI_CPU_DISABLED` is **not** a live option — it is a capability-probe lane only (it appears in the
+benchmark panel's capability rows, never in the live selector). Every run's result shows **requested
+vs effective** backend (the run always executes on whatever ORT actually applied; we never relabel).
 
 ---
 
@@ -61,111 +121,149 @@ navigation library, no chart library, no image library.
 
 ```
 com.example.clipcc/
-  MainActivity.kt                 # 2-tab Scaffold; applies FLAG_KEEP_SCREEN_ON during a run
+  MainActivity.kt                 # 2-tab Scaffold; applies FLAG_KEEP_SCREEN_ON while a run is active
   ui/
     app/ClipCCApp.kt              # top scaffold + TabRow (Classify | Benchmark)
     classify/
-      ClassifyViewModel.kt        # single state holder (StateFlow<ClassifyUiState>)
-      ClassifyUiState.kt          # SetupState + sealed RunState + ModelInfo
+      ClassifyViewModel.kt        # single state holder (StateFlow<ClassifyUiState>) + SavedStateHandle
+      ClassifyUiState.kt          # SetupState + sealed RunState + ModelInfo + DTOs (§4.1)
       Classifier.kt               # interface seam (real = FrameSampler+Engine+Scoring; fake in tests)
-      SetupCard.kt                # model/backend/video/labels/mode + options, Run/Cancel
-      RunStatus.kt                # stage + per-frame progress, Cancel
-      ResultsSection.kt           # best-match card + bar chart + mode-extra dispatch
+      RealClassifier.kt           # chunked decode→encode→release pipeline (§4.2)
+      SetupCard.kt                # model/backend/video/labels/mode + options, Run/Cancel, ETA
+      RunStatus.kt                # stage + per-chunk progress, Cancel, "Cancelling…"
+      ResultsSection.kt           # best-match card + bar charts + mode-extra dispatch
       ModeExtras.kt               # MaxExtras / TemporalExtras / ContrastExtras
+      LabelValidation.kt          # trim/blank/duplicate rules (pure, JVM-testable)
     benchmark/
-      BenchmarkScreen.kt          # grouped table + experimental badges + device header
+      BenchmarkScreen.kt          # grouped table (CPU timed + NNAPI capability-only) + device header
       BenchmarkData.kt            # parse bundled JSON → rows + capability join (pure, JVM-testable)
     charts/
-      BarChart.kt                 # grouped confidence/raw-similarity bars (Canvas)
-      TimelineChart.kt            # temporal per-frame line + segment overlay (Canvas)
+      BarChart.kt                 # grouped bars, single scale (Canvas) + Compose semantics
+      TimelineChart.kt            # temporal per-frame line + segment overlay (Canvas) + semantics
       ChartData.kt                # pure data-prep helpers (JVM-testable)
     theme/                        # exists (Color/Theme/Type)
   data/
-    ModelRepository.kt            # scan filesDir/models/<id>/manifest.json → ready models
+    ModelRepository.kt            # scan filesDir/models/<id>/manifest.json → ready models (+ size/semantics checks)
   engine/
     ScoringPolicy.kt              # NEW: model-independent defaults (mirror Python)
-    …existing engine (unchanged except the two §7 touches)…
-app/src/main/assets/phase2-benchmark-result.json   # bundled, read-only
+    Manifest.kt                   # EXTENDED: also read score_semantics, bytes, sha256 (§7.4)
+    FrameSampler.kt               # EXTENDED: Uri overload + per-frame callback hook (§7.1)
+    Engine.kt / OrtTower.kt       # EXTENDED: chunked encode + onProgress/isCancelled (§7.2/§7.3)
+    …rest unchanged…
+app/src/main/assets/phase2-benchmark-result.json   # bundled, read-only (ingestion task)
 ```
 
-**New dependencies** (via the Gradle version catalog): `androidx.lifecycle:lifecycle-viewmodel-compose`
-and `androidx.lifecycle:lifecycle-runtime-compose` (for `viewModel()` and
-`collectAsStateWithLifecycle`). Everything else (Compose BOM, Material 3, activity-compose,
-lifecycle-runtime-ktx, ONNX Runtime, Media3) is already wired in `app/build.gradle.kts`.
+**New dependencies** (Gradle version catalog): `androidx.lifecycle:lifecycle-viewmodel-compose`,
+`androidx.lifecycle:lifecycle-runtime-compose`, and `androidx.lifecycle:lifecycle-viewmodel-savedstate`
+(for `SavedStateHandle`). Everything else (Compose BOM, Material 3, activity-compose,
+lifecycle-runtime-ktx, ONNX Runtime, Media3) is already wired.
 
 ### Module boundaries
 
-- **`ClassifyViewModel`** owns all Classify state and the run lifecycle; depends on a `Classifier`
-  interface (the seam) and `ModelRepository`. No Compose, no Android-UI imports → unit-testable on the
-  JVM.
-- **`Classifier`** (interface): `suspend fun classify(req: ClassifyRequest, onProgress, isCancelled): RunResult`.
-  Real implementation wires `FrameSampler` → `Engine.scoreFrames` → `Scoring.aggregate*`. Tests inject
-  a fake returning canned `ScoreMatrices`/`AggregationResult`.
-- **`ModelRepository`** owns model discovery (filesystem scan + manifest parse + readiness); no UI.
-- **`BenchmarkData`** is a pure parser (JSON string → row models); the screen only renders.
-- **`charts/`** composables are dumb renderers; all numeric prep is in `ChartData` (pure).
+- **`ClassifyViewModel`** owns all Classify state + the run lifecycle; depends on a `Classifier`
+  interface and `ModelRepository`; no Compose/Android-UI imports → JVM-unit-testable. Setup fields are
+  mirrored into `SavedStateHandle` for process-death restore.
+- **`Classifier`** seam: `suspend fun classify(req: ClassifyRequest, onProgress, isCancelled): RunResult`.
+  `RealClassifier` runs the chunked pipeline (§4.2); tests inject a fake returning canned results.
+- **`ModelRepository`** owns discovery (scan + parse + readiness + semantics validation); no UI.
+- **`BenchmarkData`** is a pure parser; the screen only renders.
+- **`charts/`** composables are dumb renderers; all numeric prep is in `ChartData` (pure); each
+  exposes Compose semantics + a textual summary for accessibility.
 
 ---
 
-## 4. State model (`ClassifyViewModel`)
+## 4. State model & run pipeline
+
+### 4.1 Frozen DTOs (resolves review P1-2)
+
+```kotlin
+data class ClassifyRequest(
+    val modelDir: String, val manifest: ModelBundleManifest,
+    val backend: UiBackend, val videoUri: Uri,
+    val labels: List<String>,          // mean/max/temporal: as-is; contrast: posLabels + negLabels
+    val posCount: Int,                 // contrast only (0 for non-contrast)
+    val mode: AggMode,
+    val temporal: TemporalOptions, val contrast: ContrastOptions,
+)
+data class RunResult(
+    val result: AggregationResult,     // engine output (existing type)
+    val thumbnails: Map<Int, Bitmap>,  // ONLY peak-frame indices → downscaled thumbnails
+    val timestamps: DoubleArray,
+    val meta: RunMeta,
+)
+data class RunMeta(
+    val modelId: String, val requestedBackend: UiBackend, val effectiveBackend: Backend,
+    val frameCount: Int, val elapsedMs: Long, val scoreSemantics: String,
+)
+data class TemporalOptions(                       // defaults from ScoringPolicy
+    val threshold: Double = ScoringPolicy.THRESHOLD, val gap: Double = ScoringPolicy.GAP_TOLERANCE,
+    val minDuration: Double = ScoringPolicy.MIN_DURATION, val thresholdWasDefaulted: Boolean = true)
+data class ContrastOptions(
+    val threshold: Double = ScoringPolicy.CONTRAST_THRESHOLD,
+    val reduce: String = ScoringPolicy.CONTRAST_REDUCE, val thresholdWasDefaulted: Boolean = true)
+```
 
 ```kotlin
 data class SetupState(
-    val availableModels: List<ModelInfo>,
-    val selectedModelId: String?,
-    val backend: Backend = Backend.CPU_XNNPACK,
+    val availableModels: List<ModelInfo>, val selectedModelId: String?,
+    val backend: UiBackend = UiBackend.CPU_XNNPACK,
     val videoUri: Uri?, val videoName: String?,
-    val labels: List<String> = ScoringPolicy.DEFAULT_LABELS,   // mean/max/temporal
-    val posLabels: List<String>, val negLabels: List<String>,  // contrast groups
+    val labels: List<String> = ScoringPolicy.DEFAULT_LABELS,
+    val posLabels: List<String> = ScoringPolicy.DEFAULT_LABELS, val negLabels: List<String> = emptyList(),
     val mode: AggMode = AggMode.MEAN,
-    val temporal: TemporalOptions = TemporalOptions(),         // threshold/gap/minDur defaults
-    val contrast: ContrastOptions = ContrastOptions(),         // reduce/threshold defaults
+    val temporal: TemporalOptions = TemporalOptions(), val contrast: ContrastOptions = ContrastOptions(),
+    val validation: ValidationState,   // per-field errors + canRun
+    val etaMs: Long?,                  // estimated run time (§9)
 )
-
 enum class AggMode { MEAN, MAX, TEMPORAL, CONTRAST }
 
 sealed interface RunState {
     data object Idle : RunState
-    data class Running(val stage: Stage, val frameDone: Int, val frameTotal: Int) : RunState
-    data class Success(val result: AggregationResult, val frames: List<SampledFrame>, val meta: RunMeta) : RunState
+    data class Running(val stage: Stage, val chunkDone: Int, val chunkTotal: Int) : RunState
+    data object Cancelling : RunState
+    data class Success(val result: RunResult) : RunState
     data class Error(val message: String) : RunState
     data object Cancelled : RunState
 }
-enum class Stage { DECODING, ENCODING, AGGREGATING }
-data class RunMeta(val modelId: String, val backend: Backend, val frameCount: Int, val elapsedMs: Long)
-
+enum class Stage { LOADING_MODEL, DECODING, ENCODING_TEXT, ENCODING_VISION, AGGREGATING }
 data class ClassifyUiState(val setup: SetupState, val run: RunState, val keepAwake: Boolean)
 ```
 
 `StateFlow<ClassifyUiState>`, collected with `collectAsStateWithLifecycle`. The run executes in
-`viewModelScope` on `Dispatchers.Default`; the active `Job` is retained so Cancel can call
-`Job.cancel()`. `keepAwake = run is Running`.
+`viewModelScope` on `Dispatchers.Default`; the active `Job` is retained for Cancel. `keepAwake =
+run is Running`. **Only peak-frame thumbnails are retained** in `Success` (resolves review P1-3) —
+never the full bitmap set.
 
-### Data flow on **Run**
+### 4.2 Run pipeline (chunked, memory-bounded — resolves review P1-3 & P1-5)
 
-The ViewModel validates, then launches the run and owns the `RunState` transitions; steps 2–4 are
-performed *inside the real `Classifier` implementation* (the seam of §3), which emits progress back to
-the ViewModel via the `onProgress` callback. Tests swap in a fake `Classifier` and assert the same
-transitions.
+The ViewModel validates, sets `keepAwake`, launches the run, and owns `RunState`. The
+`RealClassifier` performs the work in **chunks of `ScoringPolicy.VISION_CHUNK` frames** so peak native
++ bitmap memory stays bounded regardless of frame count:
 
-1. **Validate** (ViewModel) — model ready · video chosen · ≥1 label; contrast requires ≥1 positive
-   **and** ≥1 negative. Failures keep `Idle` and disable Run with an inline reason.
-2. `Running(DECODING, 0, 0)` → `FrameSampler.sample(uri, ScoringPolicy.FPS, ScoringPolicy.MAX_FRAMES)`
-   → frames + timestamps + `VideoMeta`.
-3. `Running(ENCODING, i, N)` → `Engine(modelDir, manifest, env, backend, visionBatch, config)
-   .scoreFrames(bitmaps, labels, onProgress = { d, n -> emit }, isCancelled = { job cancelled })`
-   → `ScoreMatrices(cosine, confidence)`.
-4. `Running(AGGREGATING, N, N)` → dispatch by `mode`:
-   - `MEAN` → `Scoring.aggregateMean(confidence, cosine, labels)`
-   - `MAX` → `Scoring.aggregateMax(confidence, cosine, labels, frameTimestamps)`
-   - `TEMPORAL` → `Scoring.aggregateTemporal(confidence, cosine, labels, threshold, gap, minDur,
-     FrameTimeline(timestamps, FPS, duration), thresholdWasDefaulted)`
-   - `CONTRAST` → labels = `posLabels + negLabels`; `Scoring.aggregateContrast(confidence, cosine,
-     labels, posCount = posLabels.size, reduce, threshold, thresholdWasDefaulted, ...)`
-5. `Success(result, frames, meta)`.
+1. `LOADING_MODEL` — open text tower; **cancel checkpoint** before/after.
+2. `ENCODING_TEXT` — encode labels once; release the text session (existing memory strategy). **cancel
+   checkpoint.**
+3. Open vision tower. For each chunk of frames:
+   a. `DECODING` — `FrameSampler` decodes that chunk's frames (Media3, single worker). **cancel
+      checkpoint** between frames.
+   b. `ENCODING_VISION` — encode the chunk; accumulate the small `[chunk×D]` embeddings; **emit
+      `onProgress(chunkDone, chunkTotal)`**; **release the chunk's full bitmaps** after scoring,
+      keeping a downscaled thumbnail only if a frame is a running per-label peak. **cancel checkpoint**
+      between chunks.
+4. `AGGREGATING` — build `[F×L]` cosine/confidence from the accumulated embeddings + cached text
+   embeddings via `Scoring.scoreMatrix`, then dispatch by mode (§5.3 mapping). Compute final peak
+   indices; thumbnails for any peak not already retained are regenerated from a single re-decode of
+   those few positions (cheap).
+5. `Success(RunResult)` with `effectiveBackend` from ORT's applied EP.
 
-`videoDuration` for `FrameTimeline` = last timestamp + frame interval (or `VideoMeta`-derived);
-clamped exactly as the engine's `FrameTimeline` already does.
+**Cancellation** is cooperative at every checkpoint above; on cancel the UI shows `Cancelling…` until
+the worker returns, then `Cancelled`. Progress granularity is **per chunk** (honest — not a fake
+per-frame number under batched EPs); the label reads "Encoding frames a–b of N".
+
+**Engine implication (flagged):** the current `Engine.scoreFrames` packs *all* frames into one buffer
+and encodes once. Chunked encoding is a new engine capability (§7.3) — additive, with the existing
+all-at-once path preserved as the default for `Benchmark`/tests. This is the third engine touch and is
+called out so it is planned, not discovered mid-build.
 
 ---
 
@@ -174,189 +272,241 @@ clamped exactly as the engine's `FrameTimeline` already does.
 ### 5.1 Setup (`SetupCard`)
 
 - **Model dropdown** — `ExposedDropdownMenuBox` over `ModelRepository` ready bundles, labelled
-  `"<id> · <res>px · <precision>"`. Not-provisioned bundles greyed with a "not provisioned" hint. If
-  none are ready, an empty-state card shows the adb-push provisioning recipe (§8).
-- **Backend** — `SingleChoiceSegmentedButtonRow`: CPU·XNNPACK / CPU·EP / NNAPI(exp). The NNAPI option
-  carries an "experimental — no acceleration on Tensor G2" caption.
-- **Video picker** — button launching `ActivityResultContracts.OpenDocument` (`arrayOf("video/*")`),
-  `takePersistableUriPermission` on the result; shows the picked filename.
-- **Label editor** — add/remove list of text fields, default = `ScoringPolicy.DEFAULT_LABELS`. In
-  **contrast** mode it switches to two grouped lists (Positive / Negative).
-- **Mode selector** — segmented control MEAN / MAX / TEMPORAL / CONTRAST, plus a mode-options panel:
-  - temporal: threshold (default 0.5), gap (2.0), min-duration (1.0).
-  - contrast: reduce mode (`mean` / `top_k_mean` / `max` / `quantile`, default `mean`) + threshold
-    (default 0.15).
-- **Run** (enabled when valid) / **Cancel** (while running, in `RunStatus`).
+  `"<display_name> · <res>px · <precision>"`. Not-ready bundles greyed with the reason ("not
+  provisioned" / "size mismatch" / "unsupported semantics"). Empty-state card shows the §8 adb-push
+  recipe if none are ready.
+- **Backend** — `SingleChoiceSegmentedButtonRow` over `UiBackend` (CPU·XNNPACK / CPU·EP / NNAPI); the
+  NNAPI option carries an "experimental — 0 % delegated on Tensor G2" caption.
+- **Video picker** — `ActivityResultContracts.OpenDocument(arrayOf("video/*"))`;
+  `takePersistableUriPermission` wrapped in try/catch (resolves review P2-6) — on failure the URI is
+  used for this session only and a note is shown; the grant state is stored. Shows the picked filename.
+- **Label editor** — add/remove text fields, default `ScoringPolicy.DEFAULT_LABELS`. In **contrast**
+  mode it switches to two grouped lists (Positive / Negative). Validation (`LabelValidation`, resolves
+  review P2-11): trim whitespace, reject blank entries, reject exact duplicates within *and across*
+  groups, **preserve case** (the tokenizer is case-sensitive — parent §5.2); case-sensitivity is noted
+  in the UI.
+- **Mode selector** — MEAN / MAX / TEMPORAL / CONTRAST + a mode-options panel: temporal → threshold
+  (0.5) / gap (2.0) / min-dur (1.0); contrast → reduce mode (`mean`/`top_k_mean`/`max`/`quantile`,
+  default `mean`) + threshold (0.15). Defaults from `ScoringPolicy`.
+- **ETA** — when model+backend+video are chosen, show an estimated run time computed from the captured
+  benchmark ms/frame for that (model, nearest backend) × the clip's frame count (§9). Labelled an
+  estimate.
+- **Run** (enabled iff `validation.canRun`) / **Cancel** (while running, in `RunStatus`).
 
 ### 5.2 Run status (`RunStatus`)
 
-Shown while `Running`: stage label (Decoding / Encoding frame i of N / Aggregating), a linear
-progress indicator (indeterminate for decode, determinate `i/N` for encode), and a **Cancel** button.
+While `Running`: stage label (Loading model / Encoding labels / Decoding / Encoding frames a–b of N /
+Aggregating), a progress indicator (indeterminate for non-chunked stages, determinate
+`chunkDone/chunkTotal` for vision), elapsed time, and a **Cancel** button. On cancel → `Cancelling…`
+spinner until the worker unwinds.
 
 ### 5.3 Results (`ResultsSection`, on `Success`)
 
-- **BestMatchCard** — best-match label + confidence, with a meta line (model · backend · N frames ·
-  elapsed ms).
-- **Per-label `BarChart`** — grouped bars: confidence (0..1) and raw similarity (cosine, may be
-  negative → zero baseline). 0.5 threshold guide line; `siglip2_pairwise_sigmoid` caption.
+- **BestMatchCard** — best-match label + confidence + a meta line: model · **requested→effective
+  backend** · N frames · elapsed · `score_semantics`. (Surfaces the honesty/semantics metadata —
+  resolves review P2-10.)
+- **Per-label charts** (`BarChart` ×2, separate scales — resolves review P3-12 / chart-scale):
+  - **Confidence** row — bars 0..1 with the 0.5 threshold guide line.
+  - **Raw similarity (cosine)** row — signed/symmetric axis (cosine is small and may be negative).
+  - A **value table** beneath (label · confidence · cosine) doubles as the screen-reader text; charts
+    carry `contentDescription` summaries.
 - **Mode extras** (`ModeExtras.kt`):
-  - **MEAN** — bar chart only.
-  - **MAX** — per-label peak-frame thumbnail (`Image(bitmap.asImageBitmap())` from the retained
-    `SampledFrame` at `peakFrameIndex`) + approx timestamp.
-  - **TEMPORAL** — `TimelineChart` (per-label confidence over time + threshold line + shaded
-    segments) → segment list (label, start–end, duration, active-avg, peak) → label summaries
-    (segment count, total active duration, duration-weighted confidence); best segment highlighted.
-  - **CONTRAST** — colored verdict banner (positive / negative / uncertain) + margin (`difference`)
-    + positive/negative group means + per-label bars + dominant label.
+  - **MEAN** — the two bar rows only.
+  - **MAX** — per-label peak-frame **thumbnail** (`Image` from the retained downscaled bitmap) +
+    timestamp.
+  - **TEMPORAL** — `TimelineChart` (per-label confidence over time + threshold line + shaded segments)
+    → segment list (label, start–end, duration, active-avg, peak) → label summaries (segment count,
+    total active duration, duration-weighted confidence); best segment highlighted.
+  - **CONTRAST** — colored verdict banner (positive/negative/uncertain) + margin (`difference`) +
+    pos/neg group means + per-label bars + dominant label + threshold source / calibration status.
 
-The run's `SampledFrame` list is retained in `RunState.Success` so MAX thumbnails render. Acceptable
-at these frame counts (test clip = 7; cap = 300); thumbnails are drawn downscaled.
+### 5.4 Benchmark (`BenchmarkScreen`) — resolves review P2-7
 
-### 5.4 Benchmark (`BenchmarkScreen`)
-
-- Loads `assets/phase2-benchmark-result.json` once (`remember`), parsed by `BenchmarkData`.
-- **Device header:** *Pixel 7a · Tensor G2 · median-of-3, 1 warm-up discarded · CPU-only · captured
-  2026-06-03* — labelled explicitly as captured data, not a live re-run.
-- **Per-model groups**, each with rows per lane:
-  - **CPU·XNNPACK** and **CPU·EP** (the timed lanes): load ms · vision ms (median) · ms/frame · fps ·
-    vision node-coverage % (XNNPACK-delegated vs CPU fallback, joined from `capabilities`).
-  - **NNAPI** lanes badged **experimental** with their 0 %-delegated coverage.
-- Optional compact bars comparing ms/frame across the 4 models.
+- **Asset-ingestion task:** `phase2-benchmark-result.json` is copied into
+  `app/src/main/assets/` (its own plan task) and parsed by `BenchmarkData` (pure).
+- **Provenance header** rendered from fixed constants (the snapshot is frozen, so no JSON enrichment —
+  YAGNI): *Pixel 7a · Tensor G2 · median-of-3, 1 warm-up discarded · CPU-only · Media3 1.10.1 · captured
+  2026-06-03*.
+- **Per-model groups:**
+  - **CPU·XNNPACK** and **CPU·EP** → **timed rows**: load ms · vision ms (median) · ms/frame · fps ·
+    vision node-coverage % (joined from `capabilities`).
+  - **NNAPI_DEFAULT** and **NNAPI_CPU_DISABLED** → **capability-only rows**, explicitly labelled "not
+    timed", showing the 0 %-delegated coverage + an **experimental** badge. (The captured JSON has no
+    timed NNAPI runs; the panel must not imply otherwise.)
+- Optional compact bars comparing ms/frame across the 4 models (CPU lanes only).
 
 ---
 
 ## 6. Charts (`charts/`, Canvas)
 
-All numeric preparation lives in `ChartData` (pure functions, JVM-tested); the composables only draw.
+All numeric preparation lives in `ChartData` (pure, JVM-tested); composables only draw and attach
+semantics.
 
-- **`BarChart`** — input: list of `(label, values: FloatArray, colors)`; draws grouped bars over a
-  zero baseline (handles negative raw similarity), an optional threshold guide line, axis ticks, and
-  value labels.
-- **`TimelineChart`** — input: timestamps, per-label score series, threshold, segments; draws time-x /
-  score-y axes, one polyline per label, a dashed threshold line, and shaded segment bands. ≤300
-  points and a handful of labels → trivial.
+- **`BarChart`** — input `(label, value, scale)` groups on a **single declared scale** per instance
+  (so confidence and cosine are *separate* `BarChart`s, never dual-axis). Zero baseline supports
+  negative cosine; optional threshold guide; axis ticks; value labels; a `contentDescription`
+  summarising each bar.
+- **`TimelineChart`** — input timestamps + per-label score series + threshold + segments; draws
+  time-x / score-y axes, one polyline per label, a dashed threshold line, shaded segment bands, and a
+  textual summary for accessibility. ≤300 points, few labels.
 
 ---
 
 ## 7. Engine touches (additive, parity-neutral)
 
-Both default to current behavior, so `Benchmark` and all existing Plan-1/2 tests stay unchanged.
+All default to current behavior → `Benchmark` and every Plan-1/2 test stay green.
 
-1. **`FrameSampler.sample(uri: Uri, fps, maxFrames)` overload** → `MediaItem.fromUri(uri)`. The
-   existing `sample(videoPath: String, …)` delegates to it via `Uri.fromFile`. Avoids copying picked
-   `content://` videos to cache. Existing `FrameSamplerTest` remains green.
-2. **`Engine.scoreFrames(..., onProgress: ((Int, Int) -> Unit)? = null, isCancelled: (() -> Boolean)?
-   = null)`** — threaded into `OrtTower.encodeVision`'s per-item / per-batch loop. Progress
-   granularity: per-frame under XNNPACK (batch=1), per-batch under CPU·EP. `isCancelled` is checked
-   between frames/batches and aborts cleanly (mirrors Python `cancel_event`). Both parameters default
+1. **`FrameSampler.sample(uri: Uri, fps, maxFrames)` overload** + a per-frame callback so the
+   `RealClassifier` can decode a chunk at a time and report progress / honor cancel between frames. The
+   existing `sample(videoPath: String, …)` delegates via `Uri.fromFile`. Existing `FrameSamplerTest`
+   stays green.
+2. **`Engine.scoreFrames(..., onProgress: ((Int,Int)->Unit)? = null, isCancelled: (()->Boolean)? =
+   null)`** — threaded into `OrtTower.encodeVision`; checked between frames/batches; both default
    `null` ⇒ no change to existing callers.
+3. **Chunked vision encode** — a path that encodes a frame chunk and returns its `[chunk×D]`
+   embeddings without holding all frames (resolves review P1-3). The existing all-at-once
+   `scoreFrames` remains the default for `Benchmark`/tests; the chunked entry is new and used by the
+   UI. so400m keeps its ≤ 8 batch ceiling (Spike 0d).
+4. **`Manifest.kt` extension** — additionally read the **already-present** v1 fields `score_semantics`,
+   per-file `bytes`, and `sha256` (verified in `manifest_base256.json`). Still `schema_version == 1`;
+   purely additive parsing. `ManifestTest` updated to assert the new fields.
 
 ---
 
-## 8. Model provisioning (`ModelRepository`)
+## 8. Model provisioning (`ModelRepository`) — resolves review P2-9 & P2-10
 
-- **Bundle root:** `context.filesDir/models/<model_id>/` — Phase 2 verified `getExternalFilesDir(null)`
-  is **null** on this device, so internal `filesDir` is used.
-- **`scan()`** → for each `models/*/manifest.json`: `ModelBundleManifest.parse(...)` + verify
-  `visionFile`, `textFile`, `tokenizerFile`, and any `*DataFile` exist on disk →
-  `ModelInfo(id, resolution, precision, ready, missing)`. Readiness = manifest parses + all files
-  present. (sha256 verification is deferred — the v1 manifest parser does not expose per-file hashes;
-  noted as future work, consistent with the deferred downloader.)
-- **One active model at a time**; `Engine` is constructed per run with that bundle's `modelDir` and a
-  conservative `visionBatch` per model (so400m ≤ 8 per Spike 0d).
-- **Dev provisioning recipe** (the supported path this plan; documented for the operator):
+- **Bundle root:** `context.filesDir/models/<model_id>/` (Phase 2 verified `getExternalFilesDir(null)`
+  is **null** on this device).
+- **`scan()`** → for each `models/*/manifest.json`: `ModelBundleManifest.parse(...)`, then readiness:
+  1. all referenced files (`visionFile`, `textFile`, `tokenizerFile`, any `*DataFile`) **exist**;
+  2. each file's on-disk size **matches the manifest `bytes`** (instant integrity check — no hashing);
+  3. `score_semantics == "siglip2_pairwise_sigmoid"` (else flagged "unsupported semantics" and not
+     runnable — guards the app-side `ScoringPolicy` against a mismatched bundle).
+  → `ModelInfo(id, displayName, resolution, precision, scoreSemantics, ready, reason)`.
+- **sha256:** the manifest carries per-file hashes, but full-file hashing of 0.4–4 GB on-device is slow
+  (tens of seconds → minutes for so400m). Full verification is therefore **lazy / deferred**: it ships
+  with the network downloader (where corruption is a real risk) using a cached `.validated` marker like
+  the Python side. The adb-push path relies on size-match, since the bytes come from a trusted host
+  export, not a flaky download. (This is the explicit, documented readiness contract — resolving the
+  apparent conflict with parent §5.0, which lists sha256 as *present in the manifest*, not as
+  *verified on every scan*.)
+- **One active model at a time**; `Engine` is built per run with that bundle's `modelDir` and a
+  conservative per-model `visionBatch` (so400m ≤ 8).
+- **Dev provisioning recipe** (the supported path this plan):
   ```
   adb push <bundle_dir> /data/local/tmp/clipcc_models/
   adb shell run-as com.example.clipcc cp -r /data/local/tmp/clipcc_models/<id> files/models/
   ```
-  (The app is debuggable, so `run-as` can write into the app's internal `filesDir`.)
+  (App is debuggable, so `run-as` can write into the app's internal `filesDir`.)
 
 ---
 
-## 9. Error handling, cancellation, lifecycle
+## 9. Error handling, cancellation, lifecycle — resolves review P1-4 & P1-5
 
 ### Error handling
-- **Validation** (no model/video, <1 label, empty contrast group) is inline; Run is disabled with the
-  reason — not raised as exceptions.
-- **Runtime failures** are caught in the ViewModel and mapped to `RunState.Error(message)` with Retry
-  / Back-to-setup actions:
-  - decode failure / 0 frames / unhandled HDR → "Couldn't decode video: …".
-  - catchable `OrtException` / model-load failure → the message surfaced.
-  - missing/corrupt files → caught earlier by `ModelRepository` readiness (never reaches a run).
+- **Validation** (no model/video, <1 label, empty contrast group, blank/duplicate labels) is inline;
+  Run is disabled with per-field reasons — never thrown.
+- **Runtime failures** caught in the ViewModel → `RunState.Error(message)` with Retry / Back actions:
+  - decode failure / 0 frames / unhandled HDR → "Couldn't decode video: …" — plus, for `content://`
+    providers Media3 can't seek/decode, a **guarded copy-to-cache fallback** (decode the cached copy);
+    only if that also fails do we surface the error (resolves review P2-6).
+  - catchable `OrtException` / model-load failure → message surfaced.
+  - missing/corrupt/size-mismatch/semantics-mismatch bundles → caught by `ModelRepository` readiness
+    before a run.
 - **Native OOM caveat (documented, not pretended-handled):** a hard native ORT OOM kills the process
-  and cannot be caught in Kotlin. Mitigated by conservative per-model batch (so400m ≤ 8; the live
-  XNNPACK path is batch=1 anyway) and one resident model at a time. Stated honestly in the spec and
-  in an on-screen note for the largest model.
+  and cannot be caught. Mitigated by conservative per-model batch + chunked encode (§4.2) bounding peak
+  bitmaps + one resident model. Stated in an on-screen note for the largest model.
 
 ### Cancellation
-- **Cancel** → `Job.cancel()` and the `isCancelled` flag flips true → the engine aborts between
-  frames → `RunState.Cancelled` → back to Setup; partial work discarded. Mirrors Python `cancel_event`.
+- Cooperative checkpoints at **model-load, text-encode, each decoded frame, and each vision chunk**
+  (§4.2). `Cancel` → flag flips + `Job.cancel()` → `Cancelling…` → worker unwinds → `Cancelled` →
+  Setup; partial work discarded. Mirrors Python `cancel_event`.
 
-### Lifecycle
-- The ViewModel survives configuration changes (rotation); an in-flight run continues and the
-  `StateFlow` is re-collected.
-- `FLAG_KEEP_SCREEN_ON` is applied while `keepAwake` (i.e. `Running`) and cleared otherwise; the
-  Activity observes the flag from the collected state.
-- The persistable video URI survives process death (so Setup is restorable); an in-flight multi-minute
-  run does **not** survive process death — accepted, since there is no foreground service (lifecycle
-  decision). A single shared `OrtEnvironment.getEnvironment()` is reused across runs.
+### Lifecycle (attended / foreground-only — consistent with the no-service decision)
+- The run is **explicitly attended**: it runs while the app is foregrounded (or briefly backgrounded)
+  and the screen is held awake (`FLAG_KEEP_SCREEN_ON` while `keepAwake`). If the OS kills the process
+  mid-run, the run is **lost by design** (no foreground service this plan) — on relaunch the UI shows
+  `Idle` and the restored Setup, never a stale half-run.
+- **Setup is restored after process death** via `SavedStateHandle` (selected model id, backend, labels
+  + groups, mode, mode options) plus the persisted video URI grant (resolves review P1-4). The ETA
+  (§5.1) sets expectations before a long run starts.
+- The ViewModel survives configuration changes; an in-flight run continues and the `StateFlow` is
+  re-collected. A single shared `OrtEnvironment.getEnvironment()` is reused across runs.
 
 ---
 
 ## 10. Testing
 
-**Gate (parent §10.3):** all four modes render from real engine output; the benchmark panel shows
-timings + coverage + experimental badges.
+**Gate (parent §10.3):** all four modes render from real engine output; the benchmark panel shows the
+CPU timed lanes + NNAPI capability-only lanes with coverage + experimental badges.
 
-**Seam:** the ViewModel depends on the injected `Classifier` interface; the real implementation wires
-`FrameSampler` + `Engine` + `Scoring`, and tests inject a fake returning canned results. This keeps
-ORT/Media3/device out of unit tests.
+**Seam:** the ViewModel depends on the injected `Classifier`; the real impl wires
+`FrameSampler`+`Engine`+`Scoring` (chunked); tests inject a fake → ORT/Media3/device stay out of unit
+tests.
 
 - **JVM unit (the bulk, fast):**
-  - `ScoringPolicyTest` — every constant equals its pinned Python source value (drift guard against
+  - `ScoringPolicyTest` — every constant equals its pinned Python source value (drift guard vs
     `temporal_policy.py` / `response.py` / `config.py`).
-  - `BenchmarkDataTest` — parse a `phase2-benchmark-result.json` fixture → expected rows, the
-    capability join (vision node-coverage %), and the NNAPI experimental flag.
-  - `ClassifyViewModelTest` — validation gating; `Idle → Running → Success/Error/Cancelled`
-    transitions; `mode → aggregation` dispatch with canned `ScoreMatrices`; contrast pos/neg → correct
-    `posCount` + pos-then-neg concatenation.
-  - `ChartDataTest` — bar group values (incl. negative raw similarity baseline) and timeline
-    series/segment-band prep.
+  - `ManifestExtensionTest` — parses `score_semantics`, `bytes`, `sha256` from the real manifest
+    fixture.
+  - `ModelRepositoryTest` — readiness logic: files-exist + size-match + semantics gate (using temp
+    dirs / fakes); each failure produces the right `reason`.
+  - `LabelValidationTest` — trim, blank rejection, duplicate within/across groups, case preserved.
+  - `BenchmarkDataTest` — fixture → CPU timed rows + NNAPI capability-only rows + node-coverage join +
+    experimental flag.
+  - `ClassifyViewModelTest` — validation gating; `Idle→Running→(Cancelling)→Success/Error/Cancelled`;
+    chunked-progress emission; cancel-at-checkpoint; mode→aggregation dispatch with canned matrices;
+    contrast pos/neg → `posCount` + concat; `SavedStateHandle` round-trip of Setup; ETA computation.
+  - `ChartDataTest` — separate-scale bar prep (incl. negative cosine baseline) + timeline series /
+    segment-band prep.
 - **Instrumented smoke (1, device):** provision base-256, run the real test clip through the
-  ViewModel's real `Classifier` on-device → assert `Success` with non-empty scores and a best match
-  (confirms end-to-end wiring; numerical parity is already covered by Plan 1). Optionally a Compose
-  `createComposeRule` test driving Setup → Run → asserting Results nodes appear, using a fake fast
-  classifier to avoid a 25 s real run.
+  `RealClassifier` on-device → `Success` with non-empty scores + best match + only peak thumbnails
+  retained (confirms wiring + the chunked release; numerical parity already covered by Plan 1).
+  Optional Compose `createComposeRule` test driving Setup→Run→Results-nodes with a fake fast classifier.
 - **Manual acceptance:** Pixel 7a screenshots of each mode's Results + the benchmark panel.
 
 ---
 
 ## 11. Scope
 
-**In scope:** the 2-tab app; Setup; live run across all four modes with per-frame progress + cancel;
-Results + Canvas charts; the read-only Benchmark panel; `ModelRepository`; `ScoringPolicy`; the two
-engine touches (§7); the tests in §10.
+**In scope:** the 2-tab app; Setup (with validation + ETA); chunked, cancellable live run across all
+four modes with honest per-chunk progress; Results + separate-scale Canvas charts + a11y summaries; the
+read-only Benchmark panel (CPU timed + NNAPI capability-only); `ModelRepository` (readiness =
+parse + files-exist + size-match + semantics gate); `ScoringPolicy`; the four engine touches (§7);
+`SavedStateHandle` Setup restore; the tests in §10.
 
 **Out of scope (deferred, explicit):**
-- the §9 network downloader (HF Xet / resume / free-space / eviction / foreground service);
-- foreground service for runs;
-- manifest **schema-v2** (retired by Decision 4);
-- in-app sha256 verification of bundles;
+- the §9 network downloader (HF Xet / resume / free-space / eviction) **and its foreground service** —
+  full sha256 verification ships here;
+- foreground-service-backed runs (runs are attended this plan);
+- manifest **schema-v2** (retired by Decision 4 — v1 already carries the per-model fields);
 - model eviction UI;
 - live benchmark re-run from the app (the matrix OOMs a single process and takes ~30 min — captured
   data only);
-- fp16/fp32 precision toggle (the app uses whatever precision each bundle is provisioned at);
+- fp16/fp32 precision toggle (the app uses each bundle's provisioned precision);
 - longer / multi-clip benchmark capture.
 
 ---
 
-## 12. Open items to settle in `writing-plans`
+## 12. Items resolved in `writing-plans` before any execution task starts
 
-- **Task breakdown & order** for subagent-driven-development (likely: deps + theme scaffold →
-  `ScoringPolicy` + `ModelRepository` → engine touches (§7) → `Classifier` + ViewModel → Setup →
-  Results + charts → Benchmark panel → instrumented smoke), each with its own gate.
-- **`Classifier` request/result data shapes** — the exact `ClassifyRequest` / `RunResult` fields.
-- **Bar chart raw-similarity rendering** — shared 0..1 axis with a separate similarity scale, or two
-  stacked mini-charts (confidence vs cosine) — pick during planning.
-- **Wording of the empty-state / provisioning card** copy.
-- **Whether the optional Compose `createComposeRule` test is in the gate** or manual-only.
+These were the §12 open items; per review P1-2 they are settled in the plan (not left for mid-build):
+
+- **Task breakdown & order** for subagent-driven-development. Expected order, each its own gate:
+  1. Gradle deps + theme/`ClipCCApp` 2-tab scaffold (replaces the `Greeting` template).
+  2. `ScoringPolicy` (+ `ScoringPolicyTest`) and `Manifest.kt` extension (+ test).
+  3. `ModelRepository` (+ test).
+  4. Engine touches §7.1–7.3 (FrameSampler Uri/callback, progress/cancel, chunked encode) with the
+     existing tests kept green.
+  5. `Classifier`/`RealClassifier` + `ClassifyViewModel` (+ tests, fake classifier).
+  6. Setup screen (model/backend/video/labels/mode/options/ETA/validation).
+  7. Results + charts (separate-scale bars, timeline, mode extras, a11y).
+  8. Benchmark asset ingestion + panel.
+  9. Instrumented smoke + manual screenshots.
+- **DTO shapes** — frozen in §4.1.
+- **Chart scale** — decided (separate stacked scales, §2/§6).
+- **`VISION_CHUNK` value** and per-model `visionBatch` ceilings — set in the plan (default chunk 16;
+  so400m ceiling ≤ 8).
+- **Whether the optional Compose `createComposeRule` test is in the gate** or manual-only — decided in
+  the plan.
+- **Empty-state / provisioning card copy** — drafted in the plan.
