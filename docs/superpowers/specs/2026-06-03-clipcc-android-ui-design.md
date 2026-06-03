@@ -91,9 +91,17 @@ object ScoringPolicy {
     const val SCORE_SEMANTICS = "siglip2_pairwise_sigmoid"
     const val FPS = 1.0                   // services/video.py
     const val MAX_FRAMES = 300            // services/video.py
-    const val VISION_CHUNK = 16           // §4.2 chunked encode (UI only; not a Python value)
     val DEFAULT_LABELS = listOf(          // config.py default_labels
         "texting while driving", "sleeping while driving", "eating while driving")
+
+    // Chunked vision-encode sizing is per-(model,backend) — mirrors the phase-2 CPU_EP batches
+    // (replaces the earlier single VISION_CHUNK const; resolves review P3-6).
+    fun visionChunkFor(modelId: String, backend: UiBackend): Int = when {
+        backend != UiBackend.CPU_EP -> 16            // XNNPACK: decode/release granularity; encode is batch=1
+        modelId.contains("so400m")  -> 4
+        modelId.contains("large")   -> 8
+        else                        -> 16            // base-256 / base-384
+    }
 }
 ```
 
@@ -109,8 +117,12 @@ options. A `UiBackend` enum maps cleanly:
 | `NNAPI` (experimental) | `NNAPI_DEFAULT` | "experimental — 0 % delegated on Tensor G2" |
 
 `NNAPI_CPU_DISABLED` is **not** a live option — it is a capability-probe lane only (it appears in the
-benchmark panel's capability rows, never in the live selector). Every run's result shows **requested
-vs effective** backend (the run always executes on whatever ORT actually applied; we never relabel).
+benchmark panel's capability rows, never in the live selector). A run's result shows the **requested**
+backend only; we do **not** claim an "effective"/delegated backend live, because actual node placement
+is readable only from an untimed profiling pass (the `BackendCapabilityReport` path), not from a normal
+`createSession` (which "succeeds" for NNAPI even at 0 % delegation). Live node coverage is therefore
+shown in the Benchmark panel (captured), and the Results meta links there rather than asserting it
+(resolves review P2-3).
 
 ---
 
@@ -179,7 +191,7 @@ lifecycle-runtime-ktx, ONNX Runtime, Media3) is already wired.
 ```kotlin
 data class ClassifyRequest(
     val modelDir: String, val manifest: ModelBundleManifest,
-    val backend: UiBackend, val videoUri: Uri,
+    val backend: UiBackend, val videoUriString: String,   // parsed to Uri inside RealClassifier (platform-light)
     val labels: List<String>,          // mean/max/temporal: as-is; contrast: posLabels + negLabels
     val posCount: Int,                 // contrast only (0 for non-contrast)
     val mode: AggMode,
@@ -187,12 +199,12 @@ data class ClassifyRequest(
 )
 data class RunResult(
     val result: AggregationResult,     // engine output (existing type)
-    val thumbnails: Map<Int, Bitmap>,  // ONLY peak-frame indices → downscaled thumbnails
+    val thumbnails: Map<Int, Bitmap>,  // frameIndex → small (~96px) thumbnail; all frames, bounded (§4.2)
     val timestamps: DoubleArray,
     val meta: RunMeta,
 )
-data class RunMeta(
-    val modelId: String, val requestedBackend: UiBackend, val effectiveBackend: Backend,
+data class RunMeta(   // requestedBackend only — no live "effective" claim (see backend-mapping note, P2-3)
+    val modelId: String, val requestedBackend: UiBackend,
     val frameCount: Int, val elapsedMs: Long, val scoreSemantics: String,
 )
 data class TemporalOptions(                       // defaults from ScoringPolicy
@@ -207,7 +219,7 @@ data class ContrastOptions(
 data class SetupState(
     val availableModels: List<ModelInfo>, val selectedModelId: String?,
     val backend: UiBackend = UiBackend.CPU_XNNPACK,
-    val videoUri: Uri?, val videoName: String?,
+    val videoUriString: String?, val videoName: String?, val grantPersisted: Boolean = false,
     val labels: List<String> = ScoringPolicy.DEFAULT_LABELS,
     val posLabels: List<String> = ScoringPolicy.DEFAULT_LABELS, val negLabels: List<String> = emptyList(),
     val mode: AggMode = AggMode.MEAN,
@@ -231,30 +243,38 @@ data class ClassifyUiState(val setup: SetupState, val run: RunState, val keepAwa
 
 `StateFlow<ClassifyUiState>`, collected with `collectAsStateWithLifecycle`. The run executes in
 `viewModelScope` on `Dispatchers.Default`; the active `Job` is retained for Cancel. `keepAwake =
-run is Running`. **Only peak-frame thumbnails are retained** in `Success` (resolves review P1-3) —
-never the full bitmap set.
+run is Running`. Full bitmaps are never retained in `Success` — only small per-frame thumbnails
+(§4.2; resolves review P1-3).
+
+**Platform-light state (resolves review P2-4):** ViewModel/Setup state holds a `videoUriString`
+(String) + grant flag, **not** an Android `Uri`; the launcher (UI) produces the `Uri` and the
+`RealClassifier` parses the string back. The only Android type in the state graph is the pass-through
+`Bitmap` thumbnails in `RunResult` (produced by `RealClassifier`, rendered by the UI). Unit tests
+inject a fake `Classifier` returning an empty thumbnail map, so `ClassifyViewModelTest` constructs no
+Android type and runs on the plain JVM (Robolectric only if a test asserts on an Android type).
 
 ### 4.2 Run pipeline (chunked, memory-bounded — resolves review P1-3 & P1-5)
 
 The ViewModel validates, sets `keepAwake`, launches the run, and owns `RunState`. The
-`RealClassifier` performs the work in **chunks of `ScoringPolicy.VISION_CHUNK` frames** so peak native
-+ bitmap memory stays bounded regardless of frame count:
+`RealClassifier` works in **chunks of `ScoringPolicy.visionChunkFor(modelId, backend)` frames** so peak
+native + bitmap memory stays bounded regardless of frame count:
 
 1. `LOADING_MODEL` — open text tower; **cancel checkpoint** before/after.
 2. `ENCODING_TEXT` — encode labels once; release the text session (existing memory strategy). **cancel
    checkpoint.**
-3. Open vision tower. For each chunk of frames:
-   a. `DECODING` — `FrameSampler` decodes that chunk's frames (Media3, single worker). **cancel
-      checkpoint** between frames.
-   b. `ENCODING_VISION` — encode the chunk; accumulate the small `[chunk×D]` embeddings; **emit
-      `onProgress(chunkDone, chunkTotal)`**; **release the chunk's full bitmaps** after scoring,
-      keeping a downscaled thumbnail only if a frame is a running per-label peak. **cancel checkpoint**
-      between chunks.
+3. Open vision tower, then make **one forward decode pass** —
+   `FrameSampler.sample(uri, fps, maxFrames, onFrame)` (§7.1). For each `onFrame(SampledFrame)`:
+   downscale to a small (~96px) **thumbnail and keep it** (all-frame thumbnails total ≈ 11 MB at the
+   300-frame cap — cheap and bounded), add the full bitmap to the current chunk buffer, and **return
+   `false` to cancel** (the **per-frame cancel checkpoint**).
+   - When the chunk fills (or the pass ends): `ENCODING_VISION` — encode the chunk, accumulate the small
+     `[chunk×D]` embeddings, **emit `onProgress(chunkDone, chunkTotal)`**, then **release that chunk's
+     full bitmaps** (thumbnails already kept). **cancel checkpoint** between chunks.
 4. `AGGREGATING` — build `[F×L]` cosine/confidence from the accumulated embeddings + cached text
-   embeddings via `Scoring.scoreMatrix`, then dispatch by mode (§5.3 mapping). Compute final peak
-   indices; thumbnails for any peak not already retained are regenerated from a single re-decode of
-   those few positions (cheap).
-5. `Success(RunResult)` with `effectiveBackend` from ORT's applied EP.
+   embeddings via `Scoring.scoreMatrix`, then dispatch by mode (§5.3 mapping). MAX peak indices index
+   straight into the retained thumbnails — **no re-decode, no random-access** needed.
+5. `Success(RunResult)` (`requestedBackend` recorded; effective node placement not claimed live — see
+   the backend-mapping note).
 
 **Cancellation** is cooperative at every checkpoint above; on cancel the UI shows `Cancelling…` until
 the worker returns, then `Cancelled`. Progress granularity is **per chunk** (honest — not a fake
@@ -277,9 +297,12 @@ called out so it is planned, not discovered mid-build.
   recipe if none are ready.
 - **Backend** — `SingleChoiceSegmentedButtonRow` over `UiBackend` (CPU·XNNPACK / CPU·EP / NNAPI); the
   NNAPI option carries an "experimental — 0 % delegated on Tensor G2" caption.
-- **Video picker** — `ActivityResultContracts.OpenDocument(arrayOf("video/*"))`;
-  `takePersistableUriPermission` wrapped in try/catch (resolves review P2-6) — on failure the URI is
-  used for this session only and a note is shown; the grant state is stored. Shows the picked filename.
+- **Video picker** — `rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument())`, then
+  `launcher.launch(arrayOf("video/*"))` (the MIME array goes to `launch`, **not** the contract
+  constructor — resolves review P2-5). On result, `takePersistableUriPermission` wrapped in try/catch
+  (resolves review P2-6): on failure the URI is used for this session only with a note shown, and the
+  grant flag is stored. The `Uri` is converted to `videoUriString` for the ViewModel; the filename is
+  shown.
 - **Label editor** — add/remove text fields, default `ScoringPolicy.DEFAULT_LABELS`. In **contrast**
   mode it switches to two grouped lists (Positive / Negative). Validation (`LabelValidation`, resolves
   review P2-11): trim whitespace, reject blank entries, reject exact duplicates within *and across*
@@ -302,9 +325,9 @@ spinner until the worker unwinds.
 
 ### 5.3 Results (`ResultsSection`, on `Success`)
 
-- **BestMatchCard** — best-match label + confidence + a meta line: model · **requested→effective
-  backend** · N frames · elapsed · `score_semantics`. (Surfaces the honesty/semantics metadata —
-  resolves review P2-10.)
+- **BestMatchCard** — best-match label + confidence + a meta line: model · **requested backend** · N
+  frames · elapsed · `score_semantics`, with a caption "live node coverage not profiled — see Benchmark"
+  (no false "effective backend" claim — resolves review P2-3; surfaces semantics — P2-10).
 - **Per-label charts** (`BarChart` ×2, separate scales — resolves review P3-12 / chart-scale):
   - **Confidence** row — bars 0..1 with the 0.5 threshold guide line.
   - **Raw similarity (cosine)** row — signed/symmetric axis (cosine is small and may be negative).
@@ -356,17 +379,23 @@ semantics.
 
 All default to current behavior → `Benchmark` and every Plan-1/2 test stay green.
 
-1. **`FrameSampler.sample(uri: Uri, fps, maxFrames)` overload** + a per-frame callback so the
-   `RealClassifier` can decode a chunk at a time and report progress / honor cancel between frames. The
-   existing `sample(videoPath: String, …)` delegates via `Uri.fromFile`. Existing `FrameSamplerTest`
-   stays green.
+1. **Streaming `FrameSampler` API (resolves review P1-2):**
+   `sample(uri: Uri, fps, maxFrames, onFrame: (SampledFrame) -> Boolean): VideoMeta` — a single forward
+   decode pass that invokes `onFrame` per decoded frame and **stops early when it returns `false`**
+   (cancel; lets the classifier chunk/encode/release without holding all frames). Internally uses the
+   same `FrameExtractor.getFrame(posMs)` forward seek as today; because all-frame thumbnails are
+   retained (§4.2), no `sampleAt`/`sampleRange` random-access variant is needed. The existing
+   `sample(videoPath: String, …): Pair<VideoMeta, List<SampledFrame>>` (used by `Benchmark`) is kept and
+   may delegate to a buffering wrapper of the streaming pass. Existing `FrameSamplerTest` stays green.
 2. **`Engine.scoreFrames(..., onProgress: ((Int,Int)->Unit)? = null, isCancelled: (()->Boolean)? =
    null)`** — threaded into `OrtTower.encodeVision`; checked between frames/batches; both default
    `null` ⇒ no change to existing callers.
 3. **Chunked vision encode** — a path that encodes a frame chunk and returns its `[chunk×D]`
-   embeddings without holding all frames (resolves review P1-3). The existing all-at-once
-   `scoreFrames` remains the default for `Benchmark`/tests; the chunked entry is new and used by the
-   UI. so400m keeps its ≤ 8 batch ceiling (Spike 0d).
+   embeddings without holding all frames (resolves review P1-3). Chunk size =
+   `ScoringPolicy.visionChunkFor(modelId, backend)`, pinned to the phase-2 CPU_EP batches (base 16,
+   large 8, so400m 4) under `CPU_EP`, and 16 (decode/release granularity; encode stays batch=1) under
+   XNNPACK — resolves review P3-6, replacing the single `VISION_CHUNK` const. The existing all-at-once
+   `scoreFrames` remains the default for `Benchmark`/tests; the chunked entry is new and used by the UI.
 4. **`Manifest.kt` extension** — additionally read the **already-present** v1 fields `score_semantics`,
    per-file `bytes`, and `sha256` (verified in `manifest_base256.json`). Still `schema_version == 1`;
    purely additive parsing. `ManifestTest` updated to assert the new fields.
@@ -379,7 +408,12 @@ All default to current behavior → `Benchmark` and every Plan-1/2 test stay gre
   is **null** on this device).
 - **`scan()`** → for each `models/*/manifest.json`: `ModelBundleManifest.parse(...)`, then readiness:
   1. all referenced files (`visionFile`, `textFile`, `tokenizerFile`, any `*DataFile`) **exist**;
-  2. each file's on-disk size **matches the manifest `bytes`** (instant integrity check — no hashing);
+  2. **size-match the ONNX `vision`/`text` files only** against their manifest `bytes` (instant
+     integrity check). The v1 manifest carries `bytes` for vision/text but **not** for the tokenizer
+     (verified in `manifest_base256.json` — resolves review P1-1), so the tokenizer is
+     existence-checked and may be **sha256-verified** (it is small, so hashing is cheap). External
+     `.onnx_data` files have no `bytes` in v1 → existence-checked here; their size/hash gate ships with
+     the downloader;
   3. `score_semantics == "siglip2_pairwise_sigmoid"` (else flagged "unsupported semantics" and not
      runnable — guards the app-side `ScoringPolicy` against a mismatched bundle).
   → `ModelInfo(id, displayName, resolution, precision, scoreSemantics, ready, reason)`.
@@ -442,11 +476,14 @@ CPU timed lanes + NNAPI capability-only lanes with coverage + experimental badge
 
 **Seam:** the ViewModel depends on the injected `Classifier`; the real impl wires
 `FrameSampler`+`Engine`+`Scoring` (chunked); tests inject a fake → ORT/Media3/device stay out of unit
-tests.
+tests. Setup state is platform-light (`videoUriString`, not `Uri`; thumbnails are pass-through), so
+`ClassifyViewModelTest` runs on the plain JVM with no Android type constructed (Robolectric only if a
+specific test asserts on an Android type — resolves review P2-4).
 
 - **JVM unit (the bulk, fast):**
   - `ScoringPolicyTest` — every constant equals its pinned Python source value (drift guard vs
-    `temporal_policy.py` / `response.py` / `config.py`).
+    `temporal_policy.py` / `response.py` / `config.py`); `visionChunkFor` returns the pinned phase-2
+    batches (base 16 / large 8 / so400m 4 for CPU_EP; 16 for XNNPACK).
   - `ManifestExtensionTest` — parses `score_semantics`, `bytes`, `sha256` from the real manifest
     fixture.
   - `ModelRepositoryTest` — readiness logic: files-exist + size-match + semantics gate (using temp
@@ -505,8 +542,8 @@ These were the §12 open items; per review P1-2 they are settled in the plan (no
   9. Instrumented smoke + manual screenshots.
 - **DTO shapes** — frozen in §4.1.
 - **Chart scale** — decided (separate stacked scales, §2/§6).
-- **`VISION_CHUNK` value** and per-model `visionBatch` ceilings — set in the plan (default chunk 16;
-  so400m ceiling ≤ 8).
+- **`visionChunkFor(modelId, backend)`** — decided (CPU_EP: base 16 / large 8 / so400m 4; XNNPACK: 16
+  decode-granularity, encode batch=1), mirroring the phase-2 benchmark batches (§7.3 / P3-6).
 - **Whether the optional Compose `createComposeRule` test is in the gate** or manual-only — decided in
   the plan.
 - **Empty-state / provisioning card copy** — drafted in the plan.
