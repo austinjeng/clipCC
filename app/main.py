@@ -12,7 +12,7 @@ from typing import Optional
 
 import anyio
 import torch
-from fastapi import FastAPI, Form, UploadFile
+from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image
 from pydantic import BaseModel as PydanticBaseModel
@@ -20,11 +20,13 @@ from pydantic import BaseModel as PydanticBaseModel
 from app.config import Settings
 from app.errors.handlers import (
     DuplicateTokensError,
+    GemmaOutputParseError,
     InferenceConcurrencyError,
     InferenceTimeoutError,
     InvalidAggregationError,
     InvalidContrastParamsError,
     InvalidFpsError,
+    InvalidGemmaParamsError,
     InvalidLabelsError,
     InvalidPromptTemplateError,
     InvalidTemporalParamsError,
@@ -39,6 +41,27 @@ from app.models.model_manager import (
     NoModelLoadedError,
     ModelNotCachedError,
     InsufficientResourcesError,
+)
+from app.models.residency import ResidencyLedger
+from app.models.vlm_slot import VlmSlot, VlmState
+from app.schemas.gemma import (
+    GemmaLabelScoresResponse,
+    GemmaLatency,
+    GemmaMetadata,
+    GemmaQAResponse,
+    GemmaStatusResponse,
+)
+from app.services.gemma_prompts import (
+    build_label_scores_prompt,
+    build_qa_prompt,
+    label_scores_token_budget,
+    parse_label_scores,
+)
+from app.services.gemma_sampler import (
+    extract_frames as gemma_extract_frames,
+    plan_timestamps,
+    resolve_window,
+    validate_gemma_video,
 )
 from app.resource_gates import ResourceGates
 from app.schemas.response import (
@@ -119,24 +142,48 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
 
     settings.validate_auth_config()
 
-    state: dict = {"manager": None, "temp_store": None, "gates": None}
+    ledger = ResidencyLedger(headroom_gb=settings.residency_headroom_gb)
+
+    def _gemma_loader():
+        # Lazy import: unit tests and SigLIP2-only deployments never touch
+        # the multimodal transformers stack.
+        from app.models.gemma_vlm import GemmaVLM
+        return GemmaVLM(
+            hf_repo=settings.gemma_model_id,
+            cache_dir=settings.clip_cache_dir,
+            image_token_budget=settings.gemma_image_token_budget,
+        )
+
+    def _gemma_device() -> str:
+        if torch.cuda.is_available():
+            return "cuda:0"
+        return "cpu"  # mps draws from host RAM; ledger treats both as host memory
+
+    vlm_slot = VlmSlot(
+        loader=_gemma_loader,
+        ledger=ledger,
+        device=_gemma_device(),
+        reserve_bytes=int(settings.gemma_reserve_gb * 1e9),
+        enabled=settings.gemma_enabled,
+    )
+
+    _temp_store = TempStore(settings.temp_dir)
+    _gates = ResourceGates(
+        max_upload_concurrency=settings.effective_upload_concurrency,
+        max_inference_concurrency=settings.max_concurrent_requests,
+    )
+    state: dict = {"manager": None, "temp_store": _temp_store, "gates": _gates}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         manager = ModelManager(
             cache_dir=settings.clip_cache_dir,
             offline=settings.clipcc_offline,
+            ledger=ledger,
         )
-        temp_store = TempStore(settings.temp_dir)
-        temp_store.run_janitor()
-        gates = ResourceGates(
-            max_upload_concurrency=settings.effective_upload_concurrency,
-            max_inference_concurrency=settings.max_concurrent_requests,
-        )
+        _temp_store.run_janitor()
 
         state["manager"] = manager
-        state["temp_store"] = temp_store
-        state["gates"] = gates
 
         async def _auto_load():
             try:
@@ -151,7 +198,7 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
             while True:
                 await asyncio.sleep(JANITOR_INTERVAL_SECONDS)
                 try:
-                    await anyio.to_thread.run_sync(temp_store.run_janitor)
+                    await anyio.to_thread.run_sync(_temp_store.run_janitor)
                 except Exception as e:
                     logger.warning(f"Janitor sweep failed: {e}")
 
@@ -304,6 +351,185 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
         if not path.exists():
             return JSONResponse(status_code=404, content={"detail": "Not found"})
         return FileResponse(path)
+
+    @app.get("/gemma")
+    async def serve_gemma_ui():
+        return FileResponse(STATIC_DIR / "gemma.html")
+
+    @app.get("/api/v1/gemma/status", response_model=GemmaStatusResponse)
+    async def gemma_status():
+        return GemmaStatusResponse(
+            enabled=vlm_slot.enabled,
+            state=vlm_slot.state.value,
+            error=vlm_slot.error,
+            model_id=settings.gemma_model_id,
+            device=vlm_slot.device,
+        )
+
+    @app.post("/api/v1/gemma/warm", status_code=202)
+    async def gemma_warm():
+        try:
+            state_now = await vlm_slot.warm()
+        except InsufficientResourcesError as e:
+            return JSONResponse(status_code=503, content={"detail": str(e)})
+        except RuntimeError as e:
+            return JSONResponse(status_code=409, content={"detail": str(e)})
+        return JSONResponse(status_code=202, content={"state": state_now.value})
+
+    def _check_gemma_upload(video: UploadFile) -> None:
+        filename = video.filename or ""
+        ext = Path(filename).suffix.lower()
+        if ext not in SUPPORTED_EXTENSIONS:
+            raise UnsupportedFormatError(ext if ext else filename)
+        if vlm_slot.state != VlmState.LOADED:
+            # Defensive double-check; the middleware pre-body gate (503) is primary.
+            raise HTTPException(
+                status_code=503,
+                detail="Gemma model is not loaded. Trigger loading via POST /api/v1/gemma/warm.",
+            )
+
+    async def _run_gemma_pipeline(
+        video: UploadFile,
+        window_start: float,
+        prompt_for_model: str,
+        max_new_tokens: int,
+        parse_fn,  # (text) -> parsed | raises ValueError; None = return raw text
+    ):
+        """Shared label_scores/qa pipeline. Returns (payload, window, n_frames,
+        video_info, latency, parse_retries)."""
+        temp_store: TempStore = state["temp_store"]
+        gates: ResourceGates = state["gates"]
+        model = vlm_slot.model
+
+        request_id = str(uuid.uuid4())
+        try:
+            stored = await anyio.to_thread.run_sync(
+                temp_store.save_upload, request_id, video.file
+            )
+            video_info = await anyio.to_thread.run_sync(
+                partial(probe_video, stored.path, timeout=settings.ffmpeg_timeout_seconds)
+            )
+            validate_gemma_video(video_info, settings)
+            span_start, span_end = resolve_window(
+                video_info.duration, window_start, settings.gemma_analysis_window_seconds
+            )
+            timestamps = plan_timestamps(span_start, span_end, settings.effective_gemma_max_frames)
+
+            async with gates.vlm_admission():
+                runner = InferenceRunner(timeout_seconds=settings.request_timeout_seconds)
+                deadline = time.monotonic() + settings.request_timeout_seconds
+
+                def pipeline(cancel_event, runner_ref):
+                    t0 = time.monotonic()
+                    frame_dir = temp_store.create_frame_dir(request_id)
+                    frames = gemma_extract_frames(
+                        stored.path, timestamps, frame_dir, cancel_event,
+                        ffmpeg_timeout=settings.ffmpeg_timeout_seconds, runner=runner_ref,
+                    )
+                    if not frames:
+                        raise NoFramesExtractedError()
+                    images = [Image.open(f.path).convert("RGB") for f in frames]
+                    t1 = time.monotonic()
+
+                    text = ""
+                    parsed = None
+                    parse_err = None
+                    attempts = 2 if parse_fn is not None else 1
+                    used_attempts = 0
+                    for attempt in range(attempts):
+                        if cancel_event.is_set():
+                            break
+                        used_attempts = attempt + 1
+                        text = model.generate(images, prompt_for_model, max_new_tokens, cancel_event)
+                        if parse_fn is None:
+                            break
+                        try:
+                            parsed = parse_fn(text)
+                            parse_err = None
+                            break
+                        except ValueError as e:
+                            parse_err = e
+                    t2 = time.monotonic()
+                    if parse_fn is not None and parsed is None:
+                        raise GemmaOutputParseError(str(parse_err))
+                    latency = GemmaLatency(
+                        extract_seconds=round(t1 - t0, 3),
+                        generate_seconds=round(t2 - t1, 3),
+                        parse_seconds=0.0,  # parse happens inside the generate loop; negligible
+                    )
+                    n_retries = used_attempts - 1 if parse_fn is not None else 0
+                    return (parsed if parse_fn is not None else text), len(frames), latency, n_retries
+
+                result = await runner.run(pipeline)
+
+                if result is None:
+                    # Soft timeout: runner already waited for the worker to
+                    # unwind; measure and log the overrun (spec §3 metric).
+                    overrun = time.monotonic() - deadline
+                    logger.warning(
+                        f"Gemma request timed out; worker unwind overran the deadline by {overrun:.1f}s"
+                    )
+                    raise InferenceTimeoutError(settings.request_timeout_seconds)
+
+            payload, n_frames, latency, parse_retries = result
+            return payload, (span_start, span_end), n_frames, video_info, latency, parse_retries
+        finally:
+            temp_store.cleanup(request_id)
+
+    def _gemma_metadata(window, n_frames, video_info, latency, parse_retries) -> GemmaMetadata:
+        return GemmaMetadata(
+            model=settings.gemma_model_id,
+            device=vlm_slot.model.device if vlm_slot.model else vlm_slot.device,
+            frames_analyzed=n_frames,
+            window_start_seconds=window[0],
+            window_end_seconds=window[1],
+            video_duration_seconds=video_info.duration,
+            latency=latency,
+            parse_retries=parse_retries,
+        )
+
+    @app.post("/api/v1/gemma/label_scores", response_model=GemmaLabelScoresResponse)
+    async def gemma_label_scores(
+        video: UploadFile,
+        labels: str = Form(),
+        window_start: float = Form(default=0.0, ge=0.0),
+    ):
+        _check_gemma_upload(video)
+        parsed_labels = _parse_label_array(labels, "labels")
+        _validate_label_group(parsed_labels, "labels", max_count=settings.gemma_max_labels)
+
+        prompt = build_label_scores_prompt(parsed_labels, settings.gemma_evidence_top_k)
+        budget = label_scores_token_budget(len(parsed_labels))
+
+        payload, window, n_frames, video_info, latency, retries = await _run_gemma_pipeline(
+            video, window_start, prompt, budget,
+            parse_fn=lambda text: parse_label_scores(text, parsed_labels),
+        )
+        return GemmaLabelScoresResponse(
+            scores=payload,
+            metadata=_gemma_metadata(window, n_frames, video_info, latency, retries),
+        )
+
+    @app.post("/api/v1/gemma/qa", response_model=GemmaQAResponse)
+    async def gemma_qa(
+        video: UploadFile,
+        prompt: str = Form(),
+        window_start: float = Form(default=0.0, ge=0.0),
+    ):
+        _check_gemma_upload(video)
+        if not prompt.strip():
+            raise InvalidGemmaParamsError("prompt must be a non-empty string.")
+        if len(prompt) > 2000:
+            raise InvalidGemmaParamsError("prompt must be 2000 characters or fewer.")
+
+        payload, window, n_frames, video_info, latency, retries = await _run_gemma_pipeline(
+            video, window_start, build_qa_prompt(prompt),
+            settings.gemma_max_new_tokens_qa, parse_fn=None,
+        )
+        return GemmaQAResponse(
+            answer=payload,
+            metadata=_gemma_metadata(window, n_frames, video_info, latency, retries),
+        )
 
     @app.post("/api/v1/classify", response_model=ClassifyResponse)
     async def classify(
@@ -559,12 +785,13 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
         except TimeoutError:
             raise InferenceTimeoutError(settings.request_timeout_seconds)
 
-    return RequestGateMiddleware(
+    middleware = RequestGateMiddleware(
         app=app,
-        gates=ResourceGates(
-            max_upload_concurrency=settings.effective_upload_concurrency,
-            max_inference_concurrency=settings.max_concurrent_requests,
-        ),
+        gates=_gates,  # single shared instance — middleware upload gate and route limiters share one pool
         api_key=settings.api_key,
         max_body_bytes=settings.max_file_size_bytes,
+        vlm_state=lambda: vlm_slot.state.value,
     )
+    # Test seam: lets tests inject a fake loader and inspect slot state.
+    middleware.vlm_slot_for_tests = vlm_slot
+    return middleware
