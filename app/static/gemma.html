@@ -1,1 +1,181 @@
-<!DOCTYPE html><html><head><title>clipCC — Gemma 4</title></head><body><h1>Gemma 4</h1></body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>clipCC — Gemma 4</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background: #f5f6f8; color: #1c1e21; }
+  .container { max-width: 860px; margin: 0 auto; padding: 24px; }
+  nav { margin-bottom: 16px; border-bottom: 1px solid #ddd; padding-bottom: 8px; }
+  nav a { margin-right: 16px; text-decoration: none; color: #1a73e8; }
+  nav a.active { font-weight: bold; color: #1c1e21; }
+  .card { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .status-pill { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 13px; }
+  .status-idle { background: #eee; } .status-loading { background: #fff3cd; }
+  .status-loaded { background: #d4edda; } .status-failed { background: #f8d7da; }
+  label { display: block; margin: 10px 0 4px; font-weight: 600; font-size: 14px; }
+  input[type=text], textarea, select { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+  button { background: #1a73e8; color: #fff; border: none; border-radius: 4px; padding: 10px 18px; font-size: 14px; cursor: pointer; margin-top: 12px; }
+  button:disabled { background: #aaa; cursor: not-allowed; }
+  .bar-row { display: flex; align-items: center; margin: 6px 0; gap: 8px; }
+  .bar-label { width: 220px; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar-track { flex: 1; background: #eee; border-radius: 4px; height: 18px; position: relative; }
+  .bar-fill { background: #7b1fa2; height: 100%; border-radius: 4px; }
+  .bar-value { width: 48px; font-size: 13px; text-align: right; }
+  .evidence { font-size: 12px; color: #555; margin: 0 0 8px 228px; white-space: pre-wrap; }
+  #qaAnswer { white-space: pre-wrap; font-size: 14px; }
+  .meta { font-size: 12px; color: #666; margin-top: 12px; white-space: pre-wrap; }
+  .error { color: #b00020; white-space: pre-wrap; font-size: 13px; }
+  .disclaimer { font-size: 12px; color: #8a6d3b; background: #fcf8e3; padding: 8px; border-radius: 4px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>clipCC</h1>
+  <nav>
+    <a href="/">SigLIP2</a>
+    <a href="/gemma" class="active">Gemma 4</a>
+  </nav>
+
+  <div class="card">
+    <strong>Model:</strong> <span id="modelId"></span>
+    <span id="statusPill" class="status-pill status-idle">idle</span>
+    <span id="statusError" class="error"></span>
+    <div><button id="warmBtn">Warm model</button></div>
+  </div>
+
+  <div class="card">
+    <label for="videoInput">Video (mp4/avi/mov/mkv; first 60&nbsp;s analyzed by default)</label>
+    <input type="file" id="videoInput" accept=".mp4,.avi,.mov,.mkv">
+    <label for="windowStart">Analysis window start (seconds)</label>
+    <input type="text" id="windowStart" value="0">
+    <label for="modeSelect">Mode</label>
+    <select id="modeSelect">
+      <option value="label_scores">Label scores</option>
+      <option value="qa">Ask (free-form Q&amp;A)</option>
+    </select>
+    <div id="labelsField">
+      <label for="labelsInput">Labels (JSON array, max 16)</label>
+      <input type="text" id="labelsInput" value='["texting while driving", "sleeping while driving", "eating while driving"]'>
+    </div>
+    <div id="promptField" style="display:none;">
+      <label for="promptInput">Question</label>
+      <textarea id="promptInput" rows="2" placeholder="What is the driver doing?"></textarea>
+    </div>
+    <button id="runBtn" disabled>Analyze</button>
+  </div>
+
+  <div class="card" id="resultsCard" style="display:none;">
+    <h3>Results</h3>
+    <div id="scoresView"></div>
+    <div id="qaAnswer"></div>
+    <div id="disclaimer" class="disclaimer" style="display:none;"></div>
+    <div id="metaView" class="meta"></div>
+    <div id="errView" class="error"></div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let pollTimer = null;
+
+async function fetchStatus() {
+  try {
+    const r = await fetch('/api/v1/gemma/status');
+    const s = await r.json();
+    $('modelId').textContent = s.model_id;
+    const pill = $('statusPill');
+    pill.textContent = s.state;
+    pill.className = 'status-pill status-' + s.state;
+    $('statusError').textContent = s.error || '';
+    $('runBtn').disabled = s.state !== 'loaded';
+    $('warmBtn').disabled = (s.state === 'loading' || s.state === 'loaded');
+    if (s.state === 'loading' && !pollTimer) pollTimer = setInterval(fetchStatus, 3000);
+    if (s.state !== 'loading' && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+  } catch (e) { $('statusError').textContent = String(e); }
+}
+
+$('warmBtn').addEventListener('click', async () => {
+  try {
+    const r = await fetch('/api/v1/gemma/warm', { method: 'POST' });
+    if (!r.ok) { const b = await r.json().catch(() => ({})); $('statusError').textContent = b.detail || r.statusText; }
+    fetchStatus();
+  } catch (e) { $('statusError').textContent = String(e); }
+});
+
+$('modeSelect').addEventListener('change', () => {
+  const qa = $('modeSelect').value === 'qa';
+  $('labelsField').style.display = qa ? 'none' : '';
+  $('promptField').style.display = qa ? '' : 'none';
+});
+
+function renderScores(scores) {
+  const view = $('scoresView');
+  view.replaceChildren();
+  for (const item of scores) {
+    const row = document.createElement('div'); row.className = 'bar-row';
+    const lab = document.createElement('div'); lab.className = 'bar-label';
+    lab.textContent = item.label;                       // textContent: model output is untrusted
+    const track = document.createElement('div'); track.className = 'bar-track';
+    const fill = document.createElement('div'); fill.className = 'bar-fill';
+    fill.style.width = (item.score === null ? 0 : item.score * 100) + '%';
+    track.appendChild(fill);
+    const val = document.createElement('div'); val.className = 'bar-value';
+    val.textContent = item.score === null ? 'n/a' : item.score.toFixed(2);
+    row.append(lab, track, val);
+    view.appendChild(row);
+    if (item.evidence) {
+      const ev = document.createElement('p'); ev.className = 'evidence';
+      ev.textContent = item.evidence;                   // textContent, never innerHTML
+      view.appendChild(ev);
+    }
+  }
+}
+
+$('runBtn').addEventListener('click', async () => {
+  const file = $('videoInput').files[0];
+  if (!file) { alert('Choose a video first.'); return; }
+  const mode = $('modeSelect').value;
+  const fd = new FormData();
+  fd.append('video', file);
+  fd.append('window_start', $('windowStart').value || '0');
+  if (mode === 'label_scores') fd.append('labels', $('labelsInput').value);
+  else fd.append('prompt', $('promptInput').value);
+
+  $('resultsCard').style.display = '';
+  $('scoresView').replaceChildren(); $('qaAnswer').textContent = '';
+  $('metaView').textContent = ''; $('errView').textContent = '';
+  $('disclaimer').style.display = 'none';
+  $('runBtn').disabled = true;
+  const t0 = performance.now();
+  try {
+    const r = await fetch('/api/v1/gemma/' + mode, { method: 'POST', body: fd });
+    const body = await r.json();
+    if (!r.ok) { $('errView').textContent = (body.detail || r.statusText); return; }
+    if (mode === 'label_scores') {
+      renderScores(body.scores);
+      $('disclaimer').textContent = body.metadata.disclaimer;
+      $('disclaimer').style.display = '';
+    } else {
+      $('qaAnswer').textContent = body.answer;          // textContent: XSS rule (spec §9)
+    }
+    const md = body.metadata;
+    const wall = ((performance.now() - t0) / 1000).toFixed(1);
+    $('metaView').textContent =
+      `window: ${md.window_start_seconds}–${md.window_end_seconds}s of ${md.video_duration_seconds.toFixed(1)}s | ` +
+      `frames: ${md.frames_analyzed} | device: ${md.device}\n` +
+      `latency — extract: ${md.latency.extract_seconds}s, generate: ${md.latency.generate_seconds}s, ` +
+      `parse: ${md.latency.parse_seconds}s, wall: ${wall}s | parse retries: ${md.parse_retries}`;
+  } catch (e) {
+    $('errView').textContent = String(e);
+  } finally {
+    $('runBtn').disabled = false;
+    fetchStatus();
+  }
+});
+
+fetchStatus();
+</script>
+</body>
+</html>
