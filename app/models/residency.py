@@ -65,6 +65,25 @@ class ResidencyLedger:
         with self._lock:
             self._reservations[owner].committed = True
 
+    def replace(self, owner: str, device: str, nbytes: int) -> None:
+        """Atomically swap an owner's reservation: the availability check
+        excludes the owner's own existing reservation; on refusal the existing
+        reservation is left untouched (no release-then-fail window)."""
+        with self._lock:
+            others = sum(
+                r.nbytes for o, r in self._reservations.items()
+                if r.device == device and o != owner
+            )
+            available = self._device_free(device) - others - self._headroom_bytes
+            if nbytes > available:
+                raise InsufficientResourcesError(
+                    f"Cannot reserve {nbytes / 1e9:.1f}GB on {device}: "
+                    f"{available / 1e9:.1f}GB available after "
+                    f"{others / 1e9:.1f}GB existing reservations and "
+                    f"{self._headroom_bytes / 1e9:.1f}GB headroom."
+                )
+            self._reservations[owner] = _Reservation(device=device, nbytes=nbytes, committed=True)
+
     def rollback(self, owner: str) -> None:
         with self._lock:
             self._reservations.pop(owner, None)

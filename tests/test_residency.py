@@ -70,3 +70,22 @@ def test_commit_unknown_owner_raises_keyerror():
     ledger = make_ledger({"cpu": 10_000_000_000})
     with pytest.raises(KeyError):
         ledger.commit("nobody")
+
+
+def test_replace_swaps_atomically_excluding_own_reservation():
+    ledger = make_ledger({"cpu": 10_000_000_000})
+    ledger.reserve("siglip2", "cpu", 8_000_000_000)
+    ledger.commit("siglip2")
+    # 8GB held by self must not count against its own replacement
+    ledger.replace("siglip2", "cpu", 9_000_000_000)
+    assert ledger.reserved_bytes("cpu") == 9_000_000_000
+
+
+def test_replace_refusal_keeps_old_reservation():
+    ledger = make_ledger({"cpu": 10_000_000_000})
+    ledger.reserve("siglip2", "cpu", 4_000_000_000)
+    ledger.commit("siglip2")
+    ledger.reserve("vlm", "cpu", 5_000_000_000)
+    with pytest.raises(InsufficientResourcesError):
+        ledger.replace("siglip2", "cpu", 6_000_000_000)  # 10 - 5 (vlm) = 5 available
+    assert ledger.reserved_bytes("cpu") == 9_000_000_000  # old 4GB entry intact

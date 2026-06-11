@@ -504,3 +504,50 @@ class TestOfflineIntegration:
 
         assert mgr.active_model_id == config.model_id
         assert mgr.active_model is mock_instance
+
+
+def test_check_resources_subtracts_ledger_reservations(monkeypatch, tmp_path):
+    from app.models.model_manager import ModelManager, ModelConfig, InsufficientResourcesError
+    from app.models.residency import ResidencyLedger
+    import app.models.model_manager as mm
+
+    ledger = ResidencyLedger(headroom_gb=0.0)
+    ledger._device_free = lambda device: 20_000_000_000
+    ledger.reserve("vlm", "cpu", 12_000_000_000)
+    ledger.commit("vlm")
+
+    manager = ModelManager(cache_dir=str(tmp_path), ledger=ledger)
+
+    class FakeMem:
+        total = 20_000_000_000
+        available = 16_000_000_000
+
+    monkeypatch.setattr(mm.psutil, "virtual_memory", lambda: FakeMem())
+
+    config = ModelConfig(
+        model_id="big", display_name="Big", model_type="siglip2",
+        hf_repo="x/big", params="2B", resolution=384, min_ram_gb=10,
+    )
+    # 10GB*1.2 = 12GB required; available 16GB - 12GB vlm reservation = 4GB → must fail
+    with pytest.raises(InsufficientResourcesError):
+        manager._check_resources(config)
+
+
+def test_check_resources_passes_without_reservations(monkeypatch, tmp_path):
+    from app.models.model_manager import ModelManager, ModelConfig
+    from app.models.residency import ResidencyLedger
+    import app.models.model_manager as mm
+
+    manager = ModelManager(cache_dir=str(tmp_path), ledger=ResidencyLedger(headroom_gb=0.0))
+
+    class FakeMem:
+        total = 20_000_000_000
+        available = 16_000_000_000
+
+    monkeypatch.setattr(mm.psutil, "virtual_memory", lambda: FakeMem())
+
+    config = ModelConfig(
+        model_id="big", display_name="Big", model_type="siglip2",
+        hf_repo="x/big", params="2B", resolution=384, min_ram_gb=10,
+    )
+    manager._check_resources(config)  # must not raise
