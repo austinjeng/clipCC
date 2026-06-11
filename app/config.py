@@ -26,6 +26,19 @@ class Settings(BaseSettings):
         "sleeping while driving",
         "eating while driving",
     ]
+    # --- Gemma 4 E2B exploration (spec: docs/superpowers/specs/2026-06-12-gemma4-e2b-exploration-design.md) ---
+    gemma_model_id: str = "google/gemma-4-E2B-it"
+    gemma_enabled: bool = True
+    gemma_max_frames: int = 8
+    gemma_max_frames_cap: int = 16
+    gemma_max_labels: int = 16
+    gemma_analysis_window_seconds: float = 60.0
+    gemma_max_new_tokens_qa: int = 400
+    gemma_image_token_budget: int = 280
+    gemma_evidence_top_k: int = 3
+    # 11.4 GB bf16 weights + KV/activations margin; reserved in the residency ledger
+    gemma_reserve_gb: float = 12.0
+    residency_headroom_gb: float = 2.0
 
     model_config = {"env_prefix": "", "env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
@@ -34,6 +47,10 @@ class Settings(BaseSettings):
         if self.max_upload_concurrency is not None:
             return self.max_upload_concurrency
         return self.max_concurrent_requests + 2
+
+    @property
+    def effective_gemma_max_frames(self) -> int:
+        return min(self.gemma_max_frames, self.gemma_max_frames_cap)
 
     @property
     def max_file_size_bytes(self) -> int:

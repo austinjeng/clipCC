@@ -98,3 +98,36 @@ class TestOfflineSetting:
         monkeypatch.setenv("CLIPCC_OFFLINE", "1")
         s = Settings(allow_unauthenticated=True)
         assert s.clipcc_offline is True
+
+
+def test_gemma_defaults():
+    s = Settings(allow_unauthenticated=True)
+    assert s.gemma_model_id == "google/gemma-4-E2B-it"
+    assert s.gemma_enabled is True
+    assert s.gemma_max_frames == 8
+    assert s.gemma_max_frames_cap == 16
+    assert s.gemma_max_labels == 16
+    assert s.gemma_analysis_window_seconds == 60.0
+    assert s.gemma_max_new_tokens_qa == 400
+    assert s.gemma_image_token_budget == 280
+    assert s.gemma_evidence_top_k == 3
+    assert s.gemma_reserve_gb == 12.0
+    assert s.residency_headroom_gb == 2.0
+
+
+def test_gemma_model_id_from_env(monkeypatch):
+    monkeypatch.setenv("GEMMA_MODEL_ID", "google/gemma-4-E4B-it")
+    s = Settings(allow_unauthenticated=True)
+    assert s.gemma_model_id == "google/gemma-4-E4B-it"
+
+
+def test_gemma_enabled_from_env(monkeypatch):
+    monkeypatch.setenv("GEMMA_ENABLED", "false")
+    s = Settings(allow_unauthenticated=True)
+    assert s.gemma_enabled is False
+
+
+def test_gemma_max_frames_clamped_to_cap():
+    s = Settings(allow_unauthenticated=True, gemma_max_frames=99)
+    assert s.effective_gemma_max_frames == 16
+    assert Settings(allow_unauthenticated=True, gemma_max_frames=5).effective_gemma_max_frames == 5
