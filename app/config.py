@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     gemma_enabled: bool = True
     gemma_max_frames: int = 8
     gemma_max_frames_cap: int = 16
-    gemma_max_labels: int = 16
+    gemma_max_labels: int = 50
     gemma_analysis_window_seconds: float = 60.0
     gemma_max_new_tokens_qa: int = 400
     gemma_image_token_budget: int = 280

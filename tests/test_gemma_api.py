@@ -112,12 +112,12 @@ async def test_cold_label_scores_503_with_retry_after(app_and_slot):
 async def test_label_scores_validates_label_count(app_and_slot):
     app, slot = app_and_slot
     await force_loaded(slot)
-    too_many = "[" + ",".join(f'"label {i}"' for i in range(17)) + "]"
+    too_many = "[" + ",".join(f'"label {i}"' for i in range(51)) + "]"
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         r = await c.post("/api/v1/gemma/label_scores", files=tiny_upload(),
                          data={"labels": too_many})
         assert r.status_code == 422
-        assert "16" in r.json()["detail"]
+        assert "50" in r.json()["detail"]
 
 
 @pytest.mark.anyio

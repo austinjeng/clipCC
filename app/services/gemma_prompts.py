@@ -8,10 +8,11 @@ from app.schemas.gemma import GemmaScoreItem
 _FENCE_RE = re.compile(r"^```[a-zA-Z]*\n?|```$", re.MULTILINE)
 
 # Token budget: fixed overhead + per-label allowance ({"id": N, "score": 0.XX},
-# plus evidence strings for the top-k items). Bounded well under qa's budget.
+# plus evidence strings for the top-k items).
 _BUDGET_BASE = 64
 _BUDGET_PER_LABEL = 24
-_BUDGET_MAX = 640
+# Ceiling sized to the 50-label cap: 64 + 24*50 = 1264 must fit un-truncated
+_BUDGET_MAX = 1280
 
 
 def label_scores_token_budget(n_labels: int) -> int:

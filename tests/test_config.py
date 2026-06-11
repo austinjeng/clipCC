@@ -106,7 +106,7 @@ def test_gemma_defaults():
     assert s.gemma_enabled is True
     assert s.gemma_max_frames == 8
     assert s.gemma_max_frames_cap == 16
-    assert s.gemma_max_labels == 16
+    assert s.gemma_max_labels == 50
     assert s.gemma_analysis_window_seconds == 60.0
     assert s.gemma_max_new_tokens_qa == 400
     assert s.gemma_image_token_budget == 280

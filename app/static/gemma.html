@@ -28,6 +28,12 @@
   .meta { font-size: 12px; color: #666; margin-top: 12px; white-space: pre-wrap; }
   .error { color: #b00020; white-space: pre-wrap; font-size: 13px; }
   .disclaimer { font-size: 12px; color: #8a6d3b; background: #fcf8e3; padding: 8px; border-radius: 4px; margin-top: 10px; }
+  .csv-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .csv-btn { display: inline-block; background: #f3f4f6; color: #374151; border: 1px solid #d0d0d0;
+             border-radius: 4px; padding: 6px 12px; font-size: 13px; font-weight: 400; cursor: pointer; margin: 0; }
+  .csv-btn:hover { background: #e5e7eb; }
+  .csv-btn.danger:hover { background: #fee2e2; border-color: #dc2626; color: #dc2626; }
+  .hint { font-size: 12px; color: #666; }
 </style>
 </head>
 <body>
@@ -56,8 +62,14 @@
       <option value="qa">Ask (free-form Q&amp;A)</option>
     </select>
     <div id="labelsField">
-      <label for="labelsInput">Labels (JSON array, max 16)</label>
+      <label for="labelsInput">Labels (JSON array, max 50)</label>
       <input type="text" id="labelsInput" value='["texting while driving", "sleeping while driving", "eating while driving"]'>
+      <div class="csv-row">
+        <label class="csv-btn" for="csvInput">Import CSV</label>
+        <input type="file" id="csvInput" accept=".csv,.txt" style="display:none">
+        <button type="button" id="csvClearBtn" class="csv-btn danger" style="display:none">Clear CSV</button>
+        <span class="hint" id="csvHint"></span>
+      </div>
     </div>
     <div id="promptField" style="display:none;">
       <label for="promptInput">Question</label>
@@ -108,6 +120,54 @@ $('modeSelect').addEventListener('change', () => {
   const qa = $('modeSelect').value === 'qa';
   $('labelsField').style.display = qa ? 'none' : '';
   $('promptField').style.display = qa ? '' : 'none';
+});
+
+// CSV label import — same parsing as the SigLIP2 page: one label per line,
+// trimmed, blanks dropped, deduped. Merged into the labels JSON field so the
+// final array stays visible and editable.
+const MAX_LABELS = 50;
+let csvLabels = [];
+
+function currentLabels() {
+  try {
+    const arr = JSON.parse($('labelsInput').value);
+    return Array.isArray(arr) ? arr.filter((s) => typeof s === 'string') : [];
+  } catch { return []; }
+}
+
+function syncCsvUi(total) {
+  $('csvClearBtn').style.display = csvLabels.length ? '' : 'none';
+  if (!csvLabels.length) { $('csvHint').textContent = ''; return; }
+  let hint = csvLabels.length + ' CSV label(s) merged';
+  if (total > MAX_LABELS) hint += ' — ' + total + ' total exceeds the ' + MAX_LABELS + '-label max; the server will reject this';
+  $('csvHint').textContent = hint;
+}
+
+$('csvInput').addEventListener('change', () => {
+  const file = $('csvInput').files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const lines = e.target.result.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    const merged = currentLabels();
+    for (const lbl of lines) {
+      if (!merged.includes(lbl)) {
+        merged.push(lbl);
+        if (!csvLabels.includes(lbl)) csvLabels.push(lbl);
+      }
+    }
+    $('labelsInput').value = JSON.stringify(merged);
+    syncCsvUi(merged.length);
+  };
+  reader.readAsText(file);
+  $('csvInput').value = '';
+});
+
+$('csvClearBtn').addEventListener('click', () => {
+  const keep = currentLabels().filter((lbl) => !csvLabels.includes(lbl));
+  $('labelsInput').value = JSON.stringify(keep);
+  csvLabels = [];
+  syncCsvUi(keep.length);
 });
 
 function renderScores(scores) {

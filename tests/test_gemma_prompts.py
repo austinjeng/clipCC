@@ -34,7 +34,9 @@ def test_prompt_numbers_labels_from_1():
 
 def test_token_budget_scales_with_label_count():
     assert label_scores_token_budget(1) < label_scores_token_budget(16)
-    assert label_scores_token_budget(16) <= 640
+    # 50 labels (the cap) must fit un-truncated: 64 + 24*50 = 1264
+    assert label_scores_token_budget(50) == 1264
+    assert label_scores_token_budget(100) <= 1280
 
 
 def test_parse_happy_path():
