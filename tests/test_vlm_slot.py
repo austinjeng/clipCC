@@ -146,3 +146,37 @@ async def test_cancel_during_load_propagates_and_rolls_back():
         await slot._load_task
     assert slot._load_task.cancelled()
     assert ledger.reserved_bytes("cpu") == 0  # rolled back
+
+
+def test_cancel_stopping_criteria_reads_event():
+    import threading
+    from app.models.gemma_vlm import CancelStoppingCriteria
+
+    ev = threading.Event()
+    crit = CancelStoppingCriteria(ev)
+    assert crit(None, None) is False
+    ev.set()
+    assert crit(None, None) is True
+
+
+def test_pick_device_and_dtype_cpu(monkeypatch):
+    import torch
+    from app.models import gemma_vlm
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+    device, dtype = gemma_vlm.pick_device_and_dtype()
+    assert device == "cpu"
+    assert dtype == torch.float32  # bf16 on x86 CPU hits slow/absent kernels
+
+
+def test_build_messages_interleaves_images_then_text():
+    from PIL import Image
+    from app.models.gemma_vlm import build_messages
+
+    imgs = [Image.new("RGB", (8, 8)), Image.new("RGB", (8, 8))]
+    messages = build_messages(imgs, "describe")
+    assert messages[0]["role"] == "user"
+    content = messages[0]["content"]
+    assert [c["type"] for c in content] == ["image", "image", "text"]
+    assert content[-1]["text"] == "describe"
