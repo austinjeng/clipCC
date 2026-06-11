@@ -39,3 +39,22 @@ async def test_upload_slot_released_after_exception(gates):
             raise ValueError("boom")
     async with gates.upload_admission():
         pass
+
+
+@pytest.mark.anyio
+async def test_vlm_admission_rejects_when_full():
+    from app.errors.handlers import InferenceConcurrencyError
+    gates = ResourceGates(max_upload_concurrency=4, max_inference_concurrency=2, max_vlm_concurrency=1)
+    async with gates.vlm_admission():
+        with pytest.raises(InferenceConcurrencyError):
+            async with gates.vlm_admission():
+                pass
+
+
+@pytest.mark.anyio
+async def test_vlm_admission_independent_of_inference():
+    gates = ResourceGates(max_upload_concurrency=4, max_inference_concurrency=1, max_vlm_concurrency=1)
+    # Holding the vlm slot must not consume the inference slot
+    async with gates.vlm_admission():
+        async with gates.inference_admission():
+            pass
