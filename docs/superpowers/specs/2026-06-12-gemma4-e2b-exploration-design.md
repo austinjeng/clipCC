@@ -40,18 +40,27 @@ small holder, not a generalized manager:
   `anyio.to_thread.run_sync` — never on the event loop and never while
   holding the `asyncio.Lock` for the whole load (the lock only guards the
   state transition, so status polling and unrelated requests stay live).
-  Concurrent first requests: one triggers the load, others observe `loading`
-  and get 503 + Retry-After. `failed` state is exposed with the error detail
-  and is retryable. RAM preflight before load; refuse with 503 below floor.
+  **`POST /api/v1/gemma/warm` is the only load trigger.** Video endpoints
+  never load: a cold multipart request would otherwise consume the whole
+  upload and hold an upload-admission slot while an 11.4 GB download/load
+  runs. Instead they fail fast with 503 + Retry-After unless state is
+  `loaded`, checked in middleware **before body consumption** (path + slot
+  state is a cheap pre-body gate). `failed` state is exposed with the error
+  detail and is retryable via another warm call. Residency preflight before
+  load (see ledger below); refuse with 503 below floor.
 - **Shared residency ledger** (`app/models/residency.py`): both the SigLIP2
-  `ModelManager` preflight and `VlmSlot` register their resident footprint
-  (bytes, device) in one ledger and preflight against
-  `total - sum(reservations) - headroom`. This replaces the current
-  swap-credit assumption in `_check_resources`, which is invalidated once a
-  second resident model exists (SigLIP2 hot-swap could otherwise OOM a
-  loaded Gemma, and vice versa). Unload policy and VRAM-vs-RAM split
-  accounting deferred — exploration stage keeps the ledger to reservations +
-  headroom check only.
+  `ModelManager` preflight and `VlmSlot` go through one **per-device,
+  atomic** ledger. Accounting is keyed by device (`cpu`, `cuda:N`, `mps`) —
+  the deployment target is CUDA, where host RAM can be plentiful while VRAM
+  is the real bottleneck, so a RAM-only check would approve loads that OOM
+  the GPU. Protocol: **reserve** pending bytes on the target device before
+  load (atomic check-and-reserve against
+  `device_free - sum(reservations) - headroom`, using
+  `torch.cuda.mem_get_info()` for CUDA, psutil for cpu/mps unified memory),
+  **commit** on load success, **rollback** on failure. This replaces the
+  current swap-credit assumption in `_check_resources`, which is invalidated
+  once a second resident model exists (SigLIP2 hot-swap could otherwise OOM
+  a loaded Gemma, and vice versa). Unload policy deferred.
 - Config: `GEMMA_MODEL_ID` (default `google/gemma-4-E2B-it`),
   `GEMMA_ENABLED` (default true; replaces the incoherent `SKIP_VLM_AUTOLOAD`
   — there is no autoload to skip), `GEMMA_MAX_NEW_TOKENS_*` per mode,
@@ -131,10 +140,12 @@ Plain transformers has no constrained decoding. Plan:
 - Pin a transformers version with the patched Gemma 4 chat template;
   `enable_thinking=False` (known E2B/E4B "ghost thought channel" token-leak
   bug breaks JSON parsing otherwise).
-- Parse layer: strip code fences → `json.loads` → Pydantic validate → key by
-  label, null missing labels → one bounded retry on failure → typed
-  `GemmaOutputParseError` (HTTP 502: upstream model produced unusable output)
-  if retry fails.
+- Parse layer: strip code fences → `json.loads` → Pydantic validate →
+  **key strictly by numeric label ID** (the prompt contract from §4): reject
+  unknown IDs, reject duplicate IDs, map IDs back to the original label
+  strings server-side, null missing IDs → one bounded retry on failure →
+  typed `GemmaOutputParseError` (HTTP 502: upstream model produced unusable
+  output) if retry fails.
 - Parse failure rate is logged and surfaced in metadata — an exploration
   metric. lm-format-enforcer as logits processor is the named escalation if
   the rate is bad.
@@ -176,7 +187,7 @@ upload admission and body-size plumbing it must not consume):
 
 | Path | Policy |
 |---|---|
-| `POST /api/v1/gemma/{label_scores,qa,events}` | auth + body-size + upload admission (same as `/classify`) |
+| `POST /api/v1/gemma/{label_scores,qa,events}` | auth + **pre-body slot-state gate** (503 + Retry-After unless `loaded` — before draining the multipart body, §1) + body-size + upload admission (same as `/classify`) |
 | `GET /api/v1/gemma/status`, `POST /api/v1/gemma/warm` | auth only (no upload gate, no body plumbing) |
 | `GET /gemma` (UI page) | pass-through (same as `/`) |
 
@@ -188,8 +199,10 @@ Middleware tests extended to all new paths, including the negative cases
 - `GET /api/v1/gemma/status` — `{enabled, state: idle|loading|loaded|failed,
   error, model_id, ram_floor_ok}`. The Gemma page polls it to gate its
   submit button (mirrors index.html's model-status gating) and to show a
-  "warming" state during first-load. `POST /api/v1/gemma/warm` triggers the
-  load explicitly without a video request (returns 202 + current state).
+  "warming" state during first-load. `POST /api/v1/gemma/warm` is the
+  **only** load trigger (returns 202 + current state); the Gemma page calls
+  it on load (or via a "Warm model" button when state is `idle`/`failed`)
+  and polls status until `loaded`.
 - `GET /ready` unchanged (SigLIP2 remains the readiness criterion); Gemma
   cold-start latency on first request is documented behavior, surfaced via
   the status endpoint instead.
@@ -216,18 +229,46 @@ Middleware tests extended to all new paths, including the negative cases
   bar chart with an **absolute 0–100 % axis** (existing bars are normalized
   to top label — overlaying would lie twice). Visible per-model semantics
   disclaimer: sigmoid similarity vs verbalized uncalibrated self-report —
-  positions comparable, magnitudes not. Double upload accepted for
-  exploration (capped file size); server-side single-upload compare noted as
-  the API-path follow-up.
+  positions comparable, magnitudes not. **Span parity:** SigLIP2 classifies
+  the full video; Gemma analyzes its window (§6). When
+  `duration ≤ GEMMA_ANALYSIS_WINDOW_SECONDS` the spans match and the chart
+  says so; when longer, each result is annotated with its analyzed span
+  ("SigLIP2: full video 0–180 s / Gemma: 0–60 s") and the UI shows a
+  span-mismatch notice — no silent cross-span comparison. (Windowed classify
+  is not added; honest labeling over new backend scope.) Double upload
+  accepted for exploration (capped file size); server-side single-upload
+  compare noted as the API-path follow-up.
+
+### 10. Dependencies & Docker
+
+Current `requirements.txt` carries only `torch` + `transformers`;
+`requirements-prod.txt` is locked accordingly and the Dockerfile installs
+just `torch==2.12.0` from the PyTorch variant index. Gemma 4 multimodal
+loading per the model card needs more:
+
+- `accelerate` (pinned) — required for `device_map="auto"`.
+- `torchvision` (pinned) — image/video processor path; installed **from the
+  same PyTorch variant index as `torch`** in the Dockerfile (mixed-index
+  torch/torchvision pairs break ABI), pin matched to the torch pin.
+- `transformers` pin raised to a version with `AutoModelForMultimodalLM` and
+  the patched Gemma 4 chat template (§5).
+- `librosa` NOT added — it serves the audio path, and audio input is out of
+  scope; noted here so its absence is a decision, not an oversight. Verify
+  at Phase A that the processor does not import it for image/video-only use.
+
+Lock refresh of `requirements-prod.txt` and the Dockerfile torch/torchvision
+install line are part of Phase A.
 
 ## Phasing
 
 - **Phase A:** VlmSlot (state machine + threaded load) + residency ledger +
   GemmaVLM + gemma_sampler + middleware route policy + vlm limiter +
   `/gemma/label_scores` + `/gemma/qa` + `/gemma/status` + `/gemma/warm` +
-  gemma.html + nav. Tests: prompt-build/parse/sampler-timestamp/validation
-  units (no model needed), middleware tests for new paths incl. negative
-  cases, one gated integration test (real model, skipped in CI).
+  gemma.html + nav + dependency bundle/lock refresh (§10). Tests:
+  prompt-build/parse/sampler-timestamp/validation/ledger units (no model
+  needed), middleware tests for new paths incl. negative cases (status not
+  consuming upload slots; cold POST 503s pre-body), one gated integration
+  test (real model, skipped in CI).
 - **Phase B:** `/gemma/events` (closed-set timestamp prompting + server-side
   snap/clamp validation).
 - **Phase C:** compare view (frontend grouped chart + forced aggregation).
@@ -249,4 +290,5 @@ policy in the residency ledger, sanitized markdown rendering for qa output.
   and the request stays open until the worker unwinds; overruns are
   measured, frame/token caps are the real bounds.
 - CPU Docker is demo-only: fp32 fallback ≈ 22 GB RAM, minutes-scale latency.
-- First Gemma request pays model load (download + 11.4 GB load) unless warmed.
+- Gemma is unavailable (503 + Retry-After) until explicitly warmed; warm
+  pays download + 11.4 GB load.
