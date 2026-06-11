@@ -60,7 +60,7 @@ class GemmaVLM:
         self.model = AutoModelForMultimodalLM.from_pretrained(
             hf_repo,
             cache_dir=cache_dir,
-            torch_dtype=self.dtype,
+            dtype=self.dtype,
             device_map="auto" if self.device == "cuda" else None,
         )
         if self.device != "cuda":
