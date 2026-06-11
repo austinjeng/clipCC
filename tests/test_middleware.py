@@ -1,4 +1,5 @@
 import pytest
+from contextlib import asynccontextmanager
 from httpx import ASGITransport, AsyncClient
 from starlette.applications import Starlette
 from starlette.responses import JSONResponse
@@ -78,3 +79,110 @@ async def test_body_size_rejection():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         r = await c.post("/api/v1/classify", content=b"x" * 200)
         assert r.status_code == 413
+
+
+class NoUploadGates(ResourceGates):
+    """Test double: any path that consumes upload admission fails the test.
+    (CapacityLimiter requires >= 1 token, so 'capacity 0' can't be expressed
+    directly — assert non-consumption instead.)"""
+
+    @asynccontextmanager
+    async def upload_admission(self):
+        raise AssertionError("upload_admission must not be consumed by this path")
+        yield  # pragma: no cover
+
+
+def make_gemma_test_app(api_key=None, max_body=1024, max_upload=2,
+                        vlm_state=lambda: "loaded", gates_cls=ResourceGates):
+    gates = gates_cls(max_upload_concurrency=max_upload, max_inference_concurrency=1)
+    app = Starlette(routes=[
+        Route("/api/v1/classify", echo_app, methods=["POST"]),
+        Route("/api/v1/gemma/label_scores", echo_app, methods=["POST"]),
+        Route("/api/v1/gemma/qa", echo_app, methods=["POST"]),
+        Route("/api/v1/gemma/status", health_app, methods=["GET"]),
+        Route("/api/v1/gemma/warm", health_app, methods=["POST"]),
+        Route("/gemma", health_app, methods=["GET"]),
+        Route("/live", health_app, methods=["GET"]),
+    ])
+    return RequestGateMiddleware(app, gates=gates, api_key=api_key,
+                                 max_body_bytes=max_body, vlm_state=vlm_state)
+
+
+@pytest.mark.anyio
+async def test_gemma_upload_route_requires_auth():
+    app = make_gemma_test_app(api_key="secret")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/v1/gemma/label_scores", content=b"data")
+        assert r.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_gemma_upload_route_enforces_body_size():
+    app = make_gemma_test_app(api_key=None, max_body=10)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/v1/gemma/qa", content=b"x" * 100)
+        assert r.status_code == 413
+
+
+@pytest.mark.anyio
+async def test_gemma_cold_post_503_before_body():
+    app = make_gemma_test_app(api_key=None, vlm_state=lambda: "idle")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/v1/gemma/label_scores", content=b"data")
+        assert r.status_code == 503
+        assert "Retry-After" in r.headers
+
+
+@pytest.mark.anyio
+async def test_gemma_loading_post_503():
+    app = make_gemma_test_app(api_key=None, vlm_state=lambda: "loading")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/v1/gemma/qa", content=b"data")
+        assert r.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_gemma_status_auth_only_no_upload_gate():
+    # NoUploadGates raises if any route consumes upload admission —
+    # status must NOT consume an upload slot.
+    app = make_gemma_test_app(api_key="secret", gates_cls=NoUploadGates)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.get("/api/v1/gemma/status", headers={"X-API-Key": "secret"})
+        assert r.status_code == 200
+        r = await c.get("/api/v1/gemma/status")
+        assert r.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_gemma_warm_auth_only():
+    app = make_gemma_test_app(api_key="secret", gates_cls=NoUploadGates)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/v1/gemma/warm", headers={"X-API-Key": "secret"})
+        assert r.status_code == 200
+        r = await c.post("/api/v1/gemma/warm")
+        assert r.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_gemma_page_passes_through():
+    app = make_gemma_test_app(api_key="secret")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.get("/gemma")  # no auth, like /
+        assert r.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_classify_unaffected_by_vlm_state():
+    app = make_gemma_test_app(api_key=None, vlm_state=lambda: "idle")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/v1/classify", content=b"data")
+        assert r.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_gemma_cold_unauthenticated_gets_401_not_503():
+    # Auth ordering invariant: slot state must not be disclosed pre-auth
+    app = make_gemma_test_app(api_key="secret", vlm_state=lambda: "idle")
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/v1/gemma/label_scores", content=b"data")
+        assert r.status_code == 401
