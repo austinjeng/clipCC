@@ -145,3 +145,18 @@ class InvalidTemporalParamsError(HTTPException):
 class InvalidContrastParamsError(HTTPException):
     def __init__(self, detail: str) -> None:
         super().__init__(status_code=422, detail=detail)
+
+
+class GemmaOutputParseError(HTTPException):
+    """The VLM produced output that failed strict parsing after retry (HTTP 502:
+    upstream model produced unusable output)."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(status_code=502, detail=f"Gemma output unusable: {detail}")
+
+
+class InvalidGemmaParamsError(HTTPException):
+    """Invalid Gemma endpoint parameters (HTTP 422)."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(status_code=422, detail=detail)
