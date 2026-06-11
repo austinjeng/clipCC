@@ -1,0 +1,148 @@
+import asyncio
+
+import anyio
+import pytest
+
+from app.models.residency import ResidencyLedger
+from app.models.model_manager import InsufficientResourcesError
+from app.models.vlm_slot import VlmSlot, VlmState
+
+
+@pytest.fixture
+def anyio_backend():
+    return "asyncio"
+
+
+def make_ledger(free=100_000_000_000):
+    ledger = ResidencyLedger(headroom_gb=0.0)
+    ledger._device_free = lambda device: free
+    return ledger
+
+
+def make_slot(loader, ledger=None, reserve_bytes=12_000_000_000, enabled=True):
+    return VlmSlot(
+        loader=loader,
+        ledger=ledger or make_ledger(),
+        device="cpu",
+        reserve_bytes=reserve_bytes,
+        enabled=enabled,
+    )
+
+
+@pytest.mark.anyio
+async def test_initial_state_is_idle():
+    slot = make_slot(loader=lambda: object())
+    assert slot.state == VlmState.IDLE
+    assert slot.model is None
+
+
+@pytest.mark.anyio
+async def test_warm_loads_and_transitions_to_loaded():
+    sentinel = object()
+    slot = make_slot(loader=lambda: sentinel)
+    await slot.warm()
+    await slot.wait_settled()
+    assert slot.state == VlmState.LOADED
+    assert slot.model is sentinel
+
+
+@pytest.mark.anyio
+async def test_loader_failure_transitions_to_failed_and_rolls_back():
+    ledger = make_ledger()
+
+    def boom():
+        raise RuntimeError("download exploded")
+
+    slot = make_slot(loader=boom, ledger=ledger)
+    await slot.warm()
+    await slot.wait_settled()
+    assert slot.state == VlmState.FAILED
+    assert "download exploded" in (slot.error or "")
+    assert ledger.reserved_bytes("cpu") == 0  # rolled back
+
+
+@pytest.mark.anyio
+async def test_failed_is_retryable():
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("first time fails")
+        return object()
+
+    slot = make_slot(loader=flaky)
+    await slot.warm()
+    await slot.wait_settled()
+    assert slot.state == VlmState.FAILED
+    await slot.warm()
+    await slot.wait_settled()
+    assert slot.state == VlmState.LOADED
+
+
+@pytest.mark.anyio
+async def test_concurrent_warms_load_once():
+    started = anyio.Event()
+    release = anyio.Event()
+    calls = {"n": 0}
+
+    def slow_loader():
+        calls["n"] += 1
+        anyio.from_thread.run_sync(started.set)
+        anyio.from_thread.run(release.wait)
+        return object()
+
+    slot = make_slot(loader=slow_loader)
+    await slot.warm()
+    await started.wait()
+    assert slot.state == VlmState.LOADING
+    await slot.warm()  # second warm while loading: must coalesce, not double-load
+    release.set()
+    await slot.wait_settled()
+    assert slot.state == VlmState.LOADED
+    assert calls["n"] == 1
+
+
+@pytest.mark.anyio
+async def test_insufficient_residency_refuses_without_loading():
+    ledger = make_ledger(free=4_000_000_000)
+    calls = {"n": 0}
+
+    def loader():
+        calls["n"] += 1
+        return object()
+
+    slot = make_slot(loader=loader, ledger=ledger, reserve_bytes=12_000_000_000)
+    with pytest.raises(InsufficientResourcesError):
+        await slot.warm()
+    assert slot.state == VlmState.IDLE
+    assert calls["n"] == 0
+
+
+@pytest.mark.anyio
+async def test_disabled_slot_refuses_warm():
+    slot = make_slot(loader=lambda: object(), enabled=False)
+    with pytest.raises(RuntimeError):
+        await slot.warm()
+
+
+@pytest.mark.anyio
+async def test_cancel_during_load_propagates_and_rolls_back():
+    ledger = make_ledger()
+    loading = anyio.Event()
+    hold = anyio.Event()
+
+    def slow_loader():
+        anyio.from_thread.run_sync(loading.set)
+        anyio.from_thread.run(hold.wait)
+        return object()
+
+    slot = make_slot(loader=slow_loader, ledger=ledger)
+    await slot.warm()
+    await loading.wait()
+    slot._load_task.cancel()
+    hold.set()  # let the non-cancellable worker thread finish so cancel can deliver
+    with pytest.raises(asyncio.CancelledError):
+        await slot._load_task
+    assert slot._load_task.cancelled()
+    assert ledger.reserved_bytes("cpu") == 0  # rolled back
