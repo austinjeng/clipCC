@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     default_model_id: str = "siglip2-base-patch16-256"
     skip_model_autoload: bool = False
     clipcc_offline: bool = False
+    default_labels: list[str] = [
+        "texting while driving",
+        "sleeping while driving",
+        "eating while driving",
+    ]
 
     model_config = {"env_prefix": "", "env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

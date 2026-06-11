@@ -74,6 +74,21 @@ def test_skip_model_autoload_from_env(monkeypatch):
     assert s.skip_model_autoload is True
 
 
+def test_default_labels_default():
+    s = Settings(allow_unauthenticated=True)
+    assert s.default_labels == [
+        "texting while driving",
+        "sleeping while driving",
+        "eating while driving",
+    ]
+
+
+def test_default_labels_from_env(monkeypatch):
+    monkeypatch.setenv("DEFAULT_LABELS", '["label1", "label2"]')
+    s = Settings(allow_unauthenticated=True)
+    assert s.default_labels == ["label1", "label2"]
+
+
 class TestOfflineSetting:
     def test_offline_defaults_false(self):
         s = Settings(allow_unauthenticated=True)
