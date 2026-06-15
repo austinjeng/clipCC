@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator
 
 
 class Settings(BaseSettings):
@@ -42,6 +42,16 @@ class Settings(BaseSettings):
 
     model_config = {"env_prefix": "", "env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
+    @field_validator("api_key", mode="after")
+    @classmethod
+    def _blank_api_key_is_unset(cls, v: str | None) -> str | None:
+        # An empty or whitespace-only API_KEY (e.g. `API_KEY=${SECRET}` with SECRET
+        # undefined) must be treated as unconfigured, never as a usable key —
+        # otherwise it would match an empty X-API-Key header and bypass auth.
+        if v is not None and not v.strip():
+            return None
+        return v
+
     @property
     def effective_upload_concurrency(self) -> int:
         if self.max_upload_concurrency is not None:
@@ -57,7 +67,8 @@ class Settings(BaseSettings):
         return self.max_file_size_mb * 1024 * 1024
 
     def validate_auth_config(self) -> None:
-        if self.api_key is None and not self.allow_unauthenticated:
+        has_key = self.api_key is not None and self.api_key.strip() != ""
+        if not has_key and not self.allow_unauthenticated:
             raise RuntimeError(
-                "Authentication is not configured: set API_KEY or set ALLOW_UNAUTHENTICATED=true"
+                "Authentication is not configured: set a non-empty API_KEY or set ALLOW_UNAUTHENTICATED=true"
             )

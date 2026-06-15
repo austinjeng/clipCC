@@ -79,6 +79,10 @@ class RequestGateMiddleware:
         """Return True if auth passes (key not configured or key matches)."""
         if self._api_key is None:
             return True
+        if not self._api_key.strip():
+            # A blank/whitespace key is a misconfiguration: never authenticate
+            # with it (prevents an empty X-API-Key header from matching b"").
+            return False
         expected = self._api_key.encode()
         headers: list[tuple[bytes, bytes]] = scope.get("headers", [])
         for name, value in headers:
@@ -176,17 +180,26 @@ class RequestGateMiddleware:
                     try:
                         await self._app(scope, guarded_receive, intercepting_send)
                     except _BodyTooLargeSignal:
-                        if not response_started:
-                            max_mb = self._max_body_bytes / (1024 * 1024)
-                            await _send_json_response(
-                                send,
-                                413,
-                                {
-                                    "detail": (
-                                        f"Request body exceeds the maximum allowed size of {max_mb:.1f} MB."
-                                    )
-                                },
-                            )
+                        # Some app stacks let the signal propagate out; others
+                        # (FastAPI multipart form parsing) catch it internally and
+                        # convert it into their own response, which intercepting_send
+                        # suppresses. Either way the 413 is emitted below.
+                        pass
+
+                    # Emit the 413 whether the signal propagated out or was
+                    # swallowed inside the app — as long as no real response has
+                    # already been flushed to the client.
+                    if captured_signal and not response_started:
+                        max_mb = self._max_body_bytes / (1024 * 1024)
+                        await _send_json_response(
+                            send,
+                            413,
+                            {
+                                "detail": (
+                                    f"Request body exceeds the maximum allowed size of {max_mb:.1f} MB."
+                                )
+                            },
+                        )
             except UploadConcurrencyError:
                 await _send_json_response(
                     send,

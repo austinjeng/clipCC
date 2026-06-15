@@ -12,7 +12,8 @@ from typing import Optional
 
 import anyio
 import torch
-from fastapi import FastAPI, Form, HTTPException, UploadFile
+from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image
 from pydantic import BaseModel as PydanticBaseModel
@@ -224,8 +225,24 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
                     pass
                 except Exception as e:
                     logger.warning(f"Background task error during shutdown: {e}")
+            # Drain any in-flight Gemma VLM load so the loop doesn't tear down with
+            # a pending task; _load rolls back its reservation on cancellation.
+            await vlm_slot.aclose()
 
     app = FastAPI(lifespan=lifespan)
+
+    @app.exception_handler(RequestValidationError)
+    async def _on_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+        # FastAPI's default returns {"detail": [ {...}, ... ]} (a list of objects),
+        # but every other error in this app returns {"detail": "<string>"}. Flatten
+        # to the string shape so the error contract is consistent across all routes.
+        parts = []
+        for err in exc.errors():
+            loc = ".".join(str(p) for p in err.get("loc", []) if p != "body")
+            msg = err.get("msg", "invalid value")
+            parts.append(f"{loc}: {msg}" if loc else msg)
+        detail = "; ".join(parts) or "Request validation failed."
+        return JSONResponse(status_code=422, content={"detail": detail})
 
     @app.get("/live", response_model=HealthResponse)
     async def live():
@@ -590,6 +607,12 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
                 )
             if labels is None:
                 raise InvalidLabelsError("labels must be a valid JSON array of strings.")
+
+        # threshold, like gap_tolerance/min_duration, is only meaningful for
+        # temporal aggregation. Reject it explicitly for mean/max instead of
+        # silently dropping it — the has_any() guard below can't see it once nulled.
+        if aggregation not in ("temporal", "contrast") and threshold is not None:
+            raise InvalidTemporalParamsError()
 
         raw_temporal = RawTemporalParams(
             threshold=threshold if aggregation == "temporal" else None,

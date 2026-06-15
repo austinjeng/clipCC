@@ -52,6 +52,21 @@ def test_validate_auth_config_passes_with_flag() -> None:
     s.validate_auth_config()  # should not raise
 
 
+def test_blank_api_key_normalized_to_none() -> None:
+    # Empty / whitespace-only keys must be treated as unconfigured so they can
+    # never authenticate an empty X-API-Key header.
+    assert Settings(api_key="", allow_unauthenticated=True).api_key is None
+    assert Settings(api_key="   ", allow_unauthenticated=True).api_key is None
+
+
+def test_validate_auth_config_fails_with_blank_key() -> None:
+    # A blank key with auth required must fail closed (server must not start).
+    with pytest.raises(RuntimeError):
+        Settings(api_key="", allow_unauthenticated=False).validate_auth_config()
+    with pytest.raises(RuntimeError):
+        Settings(api_key="   ", allow_unauthenticated=False).validate_auth_config()
+
+
 def test_default_model_id_default():
     s = Settings(allow_unauthenticated=True)
     assert s.default_model_id == "siglip2-base-patch16-256"

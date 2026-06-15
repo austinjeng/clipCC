@@ -533,6 +533,40 @@ def test_check_resources_subtracts_ledger_reservations(monkeypatch, tmp_path):
         manager._check_resources(config)
 
 
+@pytest.mark.asyncio
+async def test_ledger_releases_siglip2_reservation_on_swap_to_no_min_ram(monkeypatch, tmp_path):
+    """Swapping from a min_ram_gb model to one without must release the stale
+    'siglip2' reservation, not leave phantom bytes the resource check subtracts."""
+    from app.models.residency import ResidencyLedger
+    import app.models.model_manager as mm
+
+    ledger = ResidencyLedger(headroom_gb=0.0)
+    ledger._device_free = lambda device: 50_000_000_000  # plenty for replace()
+    manager = ModelManager(cache_dir=str(tmp_path), ledger=ledger)
+
+    class FakeMem:
+        total = 64_000_000_000
+        available = 32_000_000_000
+
+    monkeypatch.setattr(mm.psutil, "virtual_memory", lambda: FakeMem())
+
+    with patch("app.models.model_manager.SigLip2Model") as MockModel:
+        MockModel.return_value = MagicMock()
+        # Load a model WITH min_ram_gb=4 → creates the 'siglip2' reservation.
+        await manager.load_model("siglip2-large-patch16-512")
+        assert ledger.reserved_bytes("cpu") == int(4 * 1e9)
+
+        # Swap to a model WITHOUT min_ram_gb → reservation must be released.
+        await manager.load_model("siglip2-base-patch16-256")
+        assert ledger.reserved_bytes("cpu") == 0
+
+        # And a subsequent large load must see the full budget (would spuriously
+        # fail with InsufficientResourcesError if the 4GB phantom lingered).
+        await manager.load_model("siglip2-large-patch16-512")
+        assert manager.active_model_id == "siglip2-large-patch16-512"
+        assert ledger.reserved_bytes("cpu") == int(4 * 1e9)
+
+
 def test_check_resources_passes_without_reservations(monkeypatch, tmp_path):
     from app.models.model_manager import ModelManager, ModelConfig
     from app.models.residency import ResidencyLedger

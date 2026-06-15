@@ -204,11 +204,17 @@ class ModelManager:
             self._swapping = False
             self._condition.notify_all()
 
-        if self._ledger is not None and config.min_ram_gb:
-            # Bookkeeping, not admission control: the bytes are already
-            # resident. replace() is atomic — no release-then-reserve window.
+        if self._ledger is not None:
+            # Bookkeeping, not admission control: the bytes are already resident.
+            # Always reconcile the 'siglip2' owner on every swap — otherwise a swap
+            # to a model without min_ram_gb would leave the prior reservation behind,
+            # and _check_resources would keep subtracting those phantom bytes.
             try:
-                self._ledger.replace("siglip2", "cpu", int(config.min_ram_gb * 1e9))
+                if config.min_ram_gb:
+                    # replace() is atomic — no release-then-reserve window.
+                    self._ledger.replace("siglip2", "cpu", int(config.min_ram_gb * 1e9))
+                else:
+                    self._ledger.release("siglip2")
             except Exception as e:
                 logger.warning(f"Residency ledger update failed after model swap: {e}")
 

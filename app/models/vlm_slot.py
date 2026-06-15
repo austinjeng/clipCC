@@ -94,6 +94,23 @@ class VlmSlot:
                 pass
         return self._state
 
+    async def aclose(self) -> None:
+        """Cancel and drain the in-flight load task so the event loop never tears
+        down with a pending task; _load rolls back the residency reservation on
+        cancellation. A no-op when no load is in flight. Note: a load already
+        running inside the worker thread is non-cancellable, so this awaits it to
+        settle before returning."""
+        task = self._load_task
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.warning(f"VLM load task error during shutdown: {e}")
+
     async def _load(self) -> None:
         try:
             model = await anyio.to_thread.run_sync(self._loader)

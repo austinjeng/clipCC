@@ -148,6 +148,47 @@ async def test_cancel_during_load_propagates_and_rolls_back():
     assert ledger.reserved_bytes("cpu") == 0  # rolled back
 
 
+@pytest.mark.anyio
+async def test_aclose_noop_when_idle():
+    slot = make_slot(loader=lambda: object())
+    await slot.aclose()  # never warmed: must be a clean no-op
+    assert slot.state == VlmState.IDLE
+
+
+@pytest.mark.anyio
+async def test_aclose_drains_completed_load():
+    slot = make_slot(loader=lambda: object())
+    await slot.warm()
+    await slot.wait_settled()
+    assert slot.state == VlmState.LOADED
+    await slot.aclose()  # already settled: must not raise
+    assert slot._load_task.done()
+
+
+@pytest.mark.anyio
+async def test_aclose_cancels_and_drains_inflight_load():
+    # Shutdown while a warm is in flight must drain the task (no pending-task
+    # warning) and roll back the residency reservation.
+    ledger = make_ledger()
+    loading = anyio.Event()
+    hold = anyio.Event()
+
+    def slow_loader():
+        anyio.from_thread.run_sync(loading.set)
+        anyio.from_thread.run(hold.wait)
+        return object()
+
+    slot = make_slot(loader=slow_loader, ledger=ledger)
+    await slot.warm()
+    await loading.wait()
+    aclose_task = asyncio.create_task(slot.aclose())
+    await asyncio.sleep(0.05)  # let aclose issue the cancel
+    hold.set()  # unblock the non-cancellable worker thread so cancel can deliver
+    await aclose_task  # must return cleanly (CancelledError swallowed)
+    assert slot._load_task.done()
+    assert ledger.reserved_bytes("cpu") == 0  # rolled back on cancel
+
+
 def test_cancel_stopping_criteria_reads_event():
     import threading
     from app.models.gemma_vlm import CancelStoppingCriteria

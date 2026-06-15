@@ -48,5 +48,11 @@ class TempStore:
             return
         cutoff = time.time() - max_age_seconds
         for child in self.base_dir.iterdir():
-            if child.is_dir() and child.stat().st_mtime < cutoff:
-                shutil.rmtree(child, ignore_errors=True)
+            try:
+                if child.is_dir() and child.stat().st_mtime < cutoff:
+                    shutil.rmtree(child, ignore_errors=True)
+            except (FileNotFoundError, OSError):
+                # A concurrent request may delete its own dir between iterdir()
+                # and stat() (TOCTOU); skip the vanished entry instead of letting
+                # the exception abort the whole sweep and strand later orphans.
+                continue

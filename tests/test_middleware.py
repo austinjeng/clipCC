@@ -73,12 +73,60 @@ def test_check_auth_non_utf8_key_rejected():
     app = make_test_app(api_key="secret")
     assert app._check_auth({"headers": [(b"x-api-key", b"\xff\xfe")]}) is False
 
+
+def test_check_auth_blank_key_never_authenticates():
+    # Defense-in-depth: a blank key reaching the middleware must reject every
+    # request, including one sending an empty X-API-Key header (b"" == b"" trap).
+    app = make_test_app(api_key="")
+    assert app._check_auth({"headers": [(b"x-api-key", b"")]}) is False
+    assert app._check_auth({"headers": []}) is False
+    app_ws = make_test_app(api_key="   ")
+    assert app_ws._check_auth({"headers": [(b"x-api-key", b"   ")]}) is False
+
 @pytest.mark.anyio
 async def test_body_size_rejection():
     app = make_test_app(max_body=100)
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
         r = await c.post("/api/v1/classify", content=b"x" * 200)
         assert r.status_code == 413
+
+
+async def swallowing_app(request):
+    # Reproduces FastAPI multipart form parsing: the body read happens inside a
+    # try/except that catches ANY exception during parse and converts it into the
+    # app's own response. This swallows _BodyTooLargeSignal so it never propagates
+    # out of the ASGI app — the failure mode the 413 path must still handle.
+    try:
+        await request.body()
+    except Exception:
+        return JSONResponse({"detail": "parse failed"}, status_code=400)
+    return JSONResponse({"ok": True})
+
+
+@pytest.mark.anyio
+async def test_body_size_rejection_when_app_swallows_signal():
+    # Regression: when the inner app catches the oversize signal (as FastAPI's
+    # multipart parser does) the middleware must still emit a real 413, not hang
+    # the client with zero ASGI messages.
+    gates = ResourceGates(max_upload_concurrency=2, max_inference_concurrency=1)
+    inner = Starlette(routes=[Route("/api/v1/classify", swallowing_app, methods=["POST"])])
+    app = RequestGateMiddleware(inner, gates=gates, api_key=None, max_body_bytes=100)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/v1/classify", content=b"x" * 200)
+        assert r.status_code == 413
+        assert "maximum allowed size" in r.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_under_limit_swallowing_app_unaffected():
+    # The post-call 413 check must not fire for normal under-limit requests.
+    gates = ResourceGates(max_upload_concurrency=2, max_inference_concurrency=1)
+    inner = Starlette(routes=[Route("/api/v1/classify", swallowing_app, methods=["POST"])])
+    app = RequestGateMiddleware(inner, gates=gates, api_key=None, max_body_bytes=100)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/v1/classify", content=b"x" * 10)
+        assert r.status_code == 200
+        assert r.json() == {"ok": True}
 
 
 class NoUploadGates(ResourceGates):
