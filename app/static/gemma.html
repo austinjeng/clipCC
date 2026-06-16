@@ -34,10 +34,47 @@
   .csv-btn:hover { background: #e5e7eb; }
   .csv-btn.danger:hover { background: #fee2e2; border-color: #dc2626; color: #dc2626; }
   .hint { font-size: 12px; color: #666; }
+  .label-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 8px; }
+  .label-chip { padding: 5px 12px; border: 1px solid #d0d0d0; border-radius: 999px; font-size: 13px;
+                font-family: inherit; cursor: pointer; background: #fff; color: #374151; user-select: none; margin: 0;
+                transition: background .15s, color .15s, border-color .15s; }
+  .label-chip:hover { border-color: #1a73e8; }
+  .label-chip.active { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+  .label-chip.csv.active { background: #16a34a; border-color: #16a34a; }
+  .label-row { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+  .label-row input[type=text] { flex: 1; margin: 0; }
   .preview { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5;
              background: #f6f8fa; color: #24292f; border: 1px solid #d0d7de; border-radius: 4px;
              padding: 10px 12px; margin: 4px 0 0; max-height: 260px; overflow: auto;
              white-space: pre-wrap; word-break: break-word; }
+  /* cute "Analyzing…" state: a filmstrip of frames lifting/glowing in a wave */
+  .analyzing { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 22px 0 26px; }
+  .filmstrip { display: flex; gap: 5px; }
+  .filmstrip span { width: 24px; height: 17px; border-radius: 3px; background: #ede9fe;
+                    border: 1px solid #ddd6fe; animation: frameScan 1.1s ease-in-out infinite; }
+  .filmstrip span:nth-child(2){animation-delay:.09s} .filmstrip span:nth-child(3){animation-delay:.18s}
+  .filmstrip span:nth-child(4){animation-delay:.27s} .filmstrip span:nth-child(5){animation-delay:.36s}
+  .filmstrip span:nth-child(6){animation-delay:.45s} .filmstrip span:nth-child(7){animation-delay:.54s}
+  .filmstrip span:nth-child(8){animation-delay:.63s}
+  @keyframes frameScan {
+    0%,100% { transform: translateY(0) scaleY(.8); opacity: .4; }
+    50% { transform: translateY(-5px) scaleY(1); opacity: 1;
+          background: linear-gradient(135deg, #a855f7, #7b1fa2); border-color: #7b1fa2;
+          box-shadow: 0 3px 9px rgba(123,31,162,.28); }
+  }
+  .analyzing-text { font-size: 15px; color: #4b5563; font-weight: 600; }
+  .analyzing-timer { color: #9ca3af; font-weight: 400; font-size: 13px; margin-left: 4px; }
+  .dots i { font-style: normal; animation: blink 1.4s infinite both; }
+  .dots i:nth-child(2){animation-delay:.2s} .dots i:nth-child(3){animation-delay:.4s}
+  @keyframes blink { 0%,80%,100%{opacity:0} 40%{opacity:1} }
+  .spinner { display:inline-block; width:13px; height:13px; vertical-align:-2px; margin-right:7px;
+             border:2px solid rgba(255,255,255,.45); border-top-color:#fff; border-radius:50%;
+             animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    .filmstrip span, .dots i, .spinner { animation: none; }
+    .filmstrip span { opacity: .8; }
+  }
 </style>
 </head>
 <body>
@@ -66,14 +103,15 @@
       <option value="qa">Ask (free-form Q&amp;A)</option>
     </select>
     <div id="labelsField">
-      <label for="labelsInput">Labels (JSON array, max 50)</label>
-      <input type="text" id="labelsInput" value='["texting while driving", "sleeping while driving", "eating while driving"]'>
-      <div class="csv-row">
+      <label>Labels <span class="hint">(click a chip to enable/disable · 1–50)</span></label>
+      <div class="label-chips" id="labelChips"></div>
+      <div class="label-row">
+        <input type="text" id="labelsInput" placeholder="Add custom labels (comma-separated)">
         <label class="csv-btn" for="csvInput">Import CSV</label>
         <input type="file" id="csvInput" accept=".csv,.txt" style="display:none">
         <button type="button" id="csvClearBtn" class="csv-btn danger" style="display:none">Clear CSV</button>
-        <span class="hint" id="csvHint"></span>
       </div>
+      <p class="hint">Toggle presets, type custom labels, or import a CSV. Only enabled labels are sent.</p>
       <label for="instructionInput">Prompt instruction <span class="hint">(JSON output format is fixed)</span></label>
       <textarea id="instructionInput" rows="3"></textarea>
       <div class="csv-row">
@@ -92,6 +130,10 @@
 
   <div class="card" id="resultsCard" style="display:none;">
     <h3>Results</h3>
+    <div id="analyzing" class="analyzing" role="status" aria-live="polite" style="display:none;">
+      <div class="filmstrip" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+      <div class="analyzing-text">Analyzing<span class="dots"><i>.</i><i>.</i><i>.</i></span><span id="analyzeTimer" class="analyzing-timer"></span></div>
+    </div>
     <div id="scoresView"></div>
     <div id="qaAnswer"></div>
     <div id="disclaimer" class="disclaimer" style="display:none;"></div>
@@ -152,17 +194,51 @@ $('resetInstructionBtn').addEventListener('click', () => {
   updatePreview();
 });
 
-// CSV label import — same parsing as the SigLIP2 page: one label per line,
-// trimmed, blanks dropped, deduped. Merged into the labels JSON field so the
-// final array stays visible and editable.
-const MAX_LABELS = 50;
+// Label chips — same enable/disable-by-click behavior as the SigLIP2 page.
+// Presets (and CSV imports) are toggleable chips; the text input adds custom
+// comma-separated labels. Effective labels = enabled chips + custom input.
+let defaultLabels = [];
+let selectedLabels = {};
 let csvLabels = [];
 
+function renderLabelChips(labels, extraClass) {
+  labels.forEach((lbl) => {
+    if (Object.prototype.hasOwnProperty.call(selectedLabels, lbl)) return;
+    const cls = 'label-chip' + (extraClass ? ' ' + extraClass : '');
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = cls + ' active';
+    chip.textContent = lbl;                              // textContent: labels are user/CSV text
+    selectedLabels[lbl] = true;
+    chip.addEventListener('click', () => {
+      selectedLabels[lbl] = !selectedLabels[lbl];
+      chip.className = selectedLabels[lbl] ? cls + ' active' : cls;
+      updatePreview();
+    });
+    $('labelChips').appendChild(chip);
+  });
+}
+
+function rebuildChips() {
+  const c = $('labelChips');
+  while (c.firstChild) c.removeChild(c.firstChild);
+  selectedLabels = {};
+  renderLabelChips(defaultLabels);
+  if (csvLabels.length) renderLabelChips(csvLabels, 'csv');
+  $('csvClearBtn').style.display = csvLabels.length ? '' : 'none';
+  updatePreview();
+}
+
+// Effective label list: enabled chips (presets + CSV) plus the custom
+// comma-separated input, deduped — used by the prompt preview and submit.
 function currentLabels() {
-  try {
-    const arr = JSON.parse($('labelsInput').value);
-    return Array.isArray(arr) ? arr.filter((s) => typeof s === 'string') : [];
-  } catch { return []; }
+  const chips = defaultLabels.concat(csvLabels).filter((lbl) => selectedLabels[lbl]);
+  const custom = $('labelsInput').value.trim()
+    ? $('labelsInput').value.split(',').map((s) => s.trim()).filter(Boolean)
+    : [];
+  const seen = Object.create(null), out = [];
+  chips.concat(custom).forEach((lbl) => { if (!seen[lbl]) { seen[lbl] = true; out.push(lbl); } });
+  return out;
 }
 
 // Reconstruct the exact final prompt the server will build: editable instruction
@@ -178,42 +254,32 @@ function updatePreview() {
 $('instructionInput').addEventListener('input', updatePreview);
 $('labelsInput').addEventListener('input', updatePreview);
 
-function syncCsvUi(total) {
-  $('csvClearBtn').style.display = csvLabels.length ? '' : 'none';
-  if (!csvLabels.length) { $('csvHint').textContent = ''; return; }
-  let hint = csvLabels.length + ' CSV label(s) merged';
-  if (total > MAX_LABELS) hint += ' — ' + total + ' total exceeds the ' + MAX_LABELS + '-label max; the server will reject this';
-  $('csvHint').textContent = hint;
-}
-
 $('csvInput').addEventListener('change', () => {
   const file = $('csvInput').files[0];
   if (!file) return;
   const reader = new FileReader();
   reader.onload = (e) => {
     const lines = e.target.result.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-    const merged = currentLabels();
-    for (const lbl of lines) {
-      if (!merged.includes(lbl)) {
-        merged.push(lbl);
-        if (!csvLabels.includes(lbl)) csvLabels.push(lbl);
-      }
-    }
-    $('labelsInput').value = JSON.stringify(merged);
-    syncCsvUi(merged.length);
-    updatePreview();
+    lines.forEach((lbl) => { if (csvLabels.indexOf(lbl) === -1) csvLabels.push(lbl); });
+    rebuildChips();
   };
   reader.readAsText(file);
   $('csvInput').value = '';
 });
 
 $('csvClearBtn').addEventListener('click', () => {
-  const keep = currentLabels().filter((lbl) => !csvLabels.includes(lbl));
-  $('labelsInput').value = JSON.stringify(keep);
   csvLabels = [];
-  syncCsvUi(keep.length);
-  updatePreview();
+  rebuildChips();
 });
+
+// Preset labels (same source as the SigLIP2 page); fall back to the driving set.
+fetch('/api/v1/labels/defaults')
+  .then((r) => r.json())
+  .then((data) => { defaultLabels = (data && data.labels) || []; rebuildChips(); })
+  .catch(() => {
+    defaultLabels = ['texting while driving', 'sleeping while driving', 'eating while driving'];
+    rebuildChips();
+  });
 
 function renderScores(scores) {
   const view = $('scoresView');
@@ -242,11 +308,12 @@ $('runBtn').addEventListener('click', async () => {
   const file = $('videoInput').files[0];
   if (!file) { alert('Choose a video first.'); return; }
   const mode = $('modeSelect').value;
+  if (mode === 'label_scores' && currentLabels().length === 0) { alert('Select or add at least one label.'); return; }
   const fd = new FormData();
   fd.append('video', file);
   fd.append('window_start', $('windowStart').value || '0');
   if (mode === 'label_scores') {
-    fd.append('labels', $('labelsInput').value);
+    fd.append('labels', JSON.stringify(currentLabels()));
     fd.append('instruction', $('instructionInput').value);
   } else fd.append('prompt', $('promptInput').value);
 
@@ -254,8 +321,13 @@ $('runBtn').addEventListener('click', async () => {
   $('scoresView').replaceChildren(); $('qaAnswer').textContent = '';
   $('metaView').textContent = ''; $('errView').textContent = '';
   $('disclaimer').style.display = 'none';
+  $('analyzing').style.display = '';
   $('runBtn').disabled = true;
+  $('runBtn').innerHTML = '<span class="spinner"></span>Analyzing…';
   const t0 = performance.now();
+  const analyzeTimer = setInterval(() => {
+    $('analyzeTimer').textContent = ((performance.now() - t0) / 1000).toFixed(1) + 's';
+  }, 100);
   try {
     const r = await fetch('/api/v1/gemma/' + mode, { method: 'POST', body: fd });
     const body = await r.json();
@@ -277,7 +349,10 @@ $('runBtn').addEventListener('click', async () => {
   } catch (e) {
     $('errView').textContent = String(e);
   } finally {
+    clearInterval(analyzeTimer);
+    $('analyzing').style.display = 'none';
     $('runBtn').disabled = false;
+    $('runBtn').textContent = 'Analyze';
     fetchStatus();
   }
 });
