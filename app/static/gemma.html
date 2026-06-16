@@ -74,9 +74,17 @@
              border:2px solid rgba(255,255,255,.45); border-top-color:#fff; border-radius:50%;
              animation: spin .7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  /* indeterminate "Warming model…" bar — status reports no %, so the bar slides */
+  .warm-progress { margin-top: 12px; }
+  .warm-bar { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; position: relative; }
+  .warm-bar span { position: absolute; left: -40%; width: 40%; height: 100%; border-radius: 4px;
+                   background: linear-gradient(90deg, #c084fc, #7b1fa2); animation: warmSlide 1.2s ease-in-out infinite; }
+  @keyframes warmSlide { 0% { left: -40%; } 100% { left: 100%; } }
+  .warm-text { font-size: 13px; color: #4b5563; font-weight: 600; margin-top: 6px; }
   @media (prefers-reduced-motion: reduce) {
     .filmstrip span, .dots i, .spinner { animation: none; }
     .filmstrip span { opacity: .8; }
+    .warm-bar span { animation: none; left: 0; width: 100%; }
   }
 </style>
 </head>
@@ -94,6 +102,10 @@
     <span id="statusPill" class="status-pill status-idle">idle</span>
     <span id="statusError" class="error"></span>
     <div><button id="warmBtn">Warm model</button></div>
+    <div id="warmProgress" class="warm-progress" role="status" aria-live="polite" style="display:none;">
+      <div class="warm-bar" aria-hidden="true"><span></span></div>
+      <div class="warm-text">Warming model<span class="dots"><i>.</i><i>.</i><i>.</i></span><span id="warmTimer" class="analyzing-timer"></span></div>
+    </div>
   </div>
 
   <div class="card">
@@ -152,6 +164,24 @@ let pollTimer = null;
 let defaultInstruction = '';
 let lockedContract = '';
 let instructionInitialized = false;
+let warmTimer = null;
+
+// Indeterminate progress while the model loads. status reports only a state
+// (loading/loaded), not a %, so the bar slides and a timer counts up like the
+// Analyze state. t0 is set when we first observe 'loading', so a reload
+// mid-warm restarts the elapsed count (best-effort, not the true load start).
+function startWarmProgress() {
+  if (warmTimer) return;
+  $('warmProgress').style.display = '';
+  const t0 = performance.now();
+  const tick = () => { $('warmTimer').textContent = ((performance.now() - t0) / 1000).toFixed(1) + 's'; };
+  tick();
+  warmTimer = setInterval(tick, 100);
+}
+function stopWarmProgress() {
+  if (warmTimer) { clearInterval(warmTimer); warmTimer = null; }
+  $('warmProgress').style.display = 'none';
+}
 
 async function fetchStatus() {
   try {
@@ -174,8 +204,13 @@ async function fetchStatus() {
     $('statusError').textContent = s.error || '';
     $('runBtn').disabled = s.state !== 'loaded';
     $('warmBtn').disabled = (s.state === 'loading' || s.state === 'loaded');
-    if (s.state === 'loading' && !pollTimer) pollTimer = setInterval(fetchStatus, 3000);
-    if (s.state !== 'loading' && pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (s.state === 'loading') {
+      startWarmProgress();
+      if (!pollTimer) pollTimer = setInterval(fetchStatus, 3000);
+    } else {
+      stopWarmProgress();
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
   } catch (e) { $('statusError').textContent = String(e); }
 }
 
