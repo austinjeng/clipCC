@@ -255,6 +255,16 @@ async def test_status_exposes_default_label_instruction(app_and_slot):
 
 
 @pytest.mark.anyio
+async def test_status_exposes_label_scores_contract(app_and_slot):
+    app, slot = app_and_slot
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.get("/api/v1/gemma/status")
+        contract = r.json()["label_scores_contract"]
+        assert "Respond with ONLY a JSON array" in contract
+        assert "Include every id exactly once." in contract
+
+
+@pytest.mark.anyio
 async def test_label_scores_instruction_length_capped(app_and_slot):
     app, slot = app_and_slot
     await force_loaded(slot)

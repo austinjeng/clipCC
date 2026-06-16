@@ -139,3 +139,22 @@ def test_blank_instruction_falls_back_to_default():
     p_blank = build_label_scores_prompt(LABELS, evidence_top_k=3, instruction="   ")
     p_default = build_label_scores_prompt(LABELS, evidence_top_k=3)
     assert p_blank == p_default
+
+
+def test_label_scores_contract_is_the_locked_json_block():
+    from app.services.gemma_prompts import label_scores_contract
+
+    c = label_scores_contract(3)
+    assert "Respond with ONLY a JSON array" in c
+    assert "3 highest-scoring" in c
+    assert '"id"' in c and '"score"' in c
+    assert "Include every id exactly once." in c
+
+
+def test_builder_ends_with_the_contract():
+    from app.services.gemma_prompts import label_scores_contract
+
+    # the exposed contract must be exactly the tail of the real prompt so a
+    # client-side preview can reconstruct the final message without drift
+    p = build_label_scores_prompt(LABELS, evidence_top_k=3)
+    assert p.endswith(label_scores_contract(3))

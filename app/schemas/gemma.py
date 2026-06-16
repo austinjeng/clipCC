@@ -54,3 +54,4 @@ class GemmaStatusResponse(BaseModel):
     model_id: str
     device: str
     default_label_instruction: str = ""  # default editable prompt for label-scores mode
+    label_scores_contract: str = ""  # locked JSON-output contract appended to every label-scores prompt

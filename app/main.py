@@ -56,6 +56,7 @@ from app.services.gemma_prompts import (
     DEFAULT_LABEL_SCORES_INSTRUCTION,
     build_label_scores_prompt,
     build_qa_prompt,
+    label_scores_contract,
     label_scores_token_budget,
     parse_label_scores,
 )
@@ -383,6 +384,7 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
             model_id=settings.gemma_model_id,
             device=vlm_slot.device,
             default_label_instruction=DEFAULT_LABEL_SCORES_INSTRUCTION,
+            label_scores_contract=label_scores_contract(settings.gemma_evidence_top_k),
         )
 
     @app.post("/api/v1/gemma/warm", status_code=202)

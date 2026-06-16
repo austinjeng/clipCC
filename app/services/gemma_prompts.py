@@ -27,6 +27,19 @@ DEFAULT_LABEL_SCORES_INSTRUCTION = (
 )
 
 
+def label_scores_contract(evidence_top_k: int) -> str:
+    # The locked JSON-output contract appended after the (editable) instruction
+    # and the behaviors block. Single source of truth so the UI can preview the
+    # exact final prompt without drifting from what is actually sent.
+    return (
+        "Respond with ONLY a JSON array, no other text. One object per behavior id:\n"
+        '[{"id": <behavior number>, "score": <number from 0.0 to 1.0>}]\n'
+        f"For the {evidence_top_k} highest-scoring behaviors only, add an "
+        '"evidence" field: one short sentence describing what you saw.\n'
+        "Scores must be JSON numbers, not strings. Include every id exactly once."
+    )
+
+
 def build_label_scores_prompt(
     labels: list[str], evidence_top_k: int, instruction: str | None = None
 ) -> str:
@@ -38,11 +51,7 @@ def build_label_scores_prompt(
     return (
         f"{instr}\n\n"
         f"Behaviors:\n{numbered}\n\n"
-        "Respond with ONLY a JSON array, no other text. One object per behavior id:\n"
-        '[{"id": <behavior number>, "score": <number from 0.0 to 1.0>}]\n'
-        f"For the {evidence_top_k} highest-scoring behaviors only, add an "
-        '"evidence" field: one short sentence describing what you saw.\n'
-        "Scores must be JSON numbers, not strings. Include every id exactly once."
+        f"{label_scores_contract(evidence_top_k)}"
     )
 
 

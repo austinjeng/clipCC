@@ -34,6 +34,10 @@
   .csv-btn:hover { background: #e5e7eb; }
   .csv-btn.danger:hover { background: #fee2e2; border-color: #dc2626; color: #dc2626; }
   .hint { font-size: 12px; color: #666; }
+  .preview { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5;
+             background: #f6f8fa; color: #24292f; border: 1px solid #d0d7de; border-radius: 4px;
+             padding: 10px 12px; margin: 4px 0 0; max-height: 260px; overflow: auto;
+             white-space: pre-wrap; word-break: break-word; }
 </style>
 </head>
 <body>
@@ -76,6 +80,8 @@
         <button type="button" id="resetInstructionBtn" class="csv-btn">Reset to default</button>
         <span class="hint">Edit how Gemma is told to judge the behaviors. The numbered labels and the strict JSON contract are appended automatically.</span>
       </div>
+      <label for="promptPreview">Final prompt sent to Gemma <span class="hint">(read-only preview — updates as you type)</span></label>
+      <pre id="promptPreview" class="preview" aria-live="polite"></pre>
     </div>
     <div id="promptField" style="display:none;">
       <label for="promptInput">Question</label>
@@ -98,6 +104,7 @@
 const $ = (id) => document.getElementById(id);
 let pollTimer = null;
 let defaultInstruction = '';
+let lockedContract = '';
 let instructionInitialized = false;
 
 async function fetchStatus() {
@@ -113,6 +120,8 @@ async function fetchStatus() {
         instructionInitialized = true;
       }
     }
+    if (typeof s.label_scores_contract === 'string') lockedContract = s.label_scores_contract;
+    updatePreview();
     const pill = $('statusPill');
     pill.textContent = s.state;
     pill.className = 'status-pill status-' + s.state;
@@ -140,6 +149,7 @@ $('modeSelect').addEventListener('change', () => {
 
 $('resetInstructionBtn').addEventListener('click', () => {
   $('instructionInput').value = defaultInstruction;
+  updatePreview();
 });
 
 // CSV label import — same parsing as the SigLIP2 page: one label per line,
@@ -154,6 +164,19 @@ function currentLabels() {
     return Array.isArray(arr) ? arr.filter((s) => typeof s === 'string') : [];
   } catch { return []; }
 }
+
+// Reconstruct the exact final prompt the server will build: editable instruction
+// (or default when blank) + numbered behaviors + the locked JSON contract.
+function buildPreview() {
+  const instr = ($('instructionInput').value || '').trim() || defaultInstruction;
+  const numbered = currentLabels().map((l, i) => (i + 1) + ': ' + l).join('\n');
+  return instr + '\n\nBehaviors:\n' + numbered + '\n\n' + lockedContract;
+}
+function updatePreview() {
+  $('promptPreview').textContent = buildPreview();   // textContent: labels/instruction are user text
+}
+$('instructionInput').addEventListener('input', updatePreview);
+$('labelsInput').addEventListener('input', updatePreview);
 
 function syncCsvUi(total) {
   $('csvClearBtn').style.display = csvLabels.length ? '' : 'none';
@@ -178,6 +201,7 @@ $('csvInput').addEventListener('change', () => {
     }
     $('labelsInput').value = JSON.stringify(merged);
     syncCsvUi(merged.length);
+    updatePreview();
   };
   reader.readAsText(file);
   $('csvInput').value = '';
@@ -188,6 +212,7 @@ $('csvClearBtn').addEventListener('click', () => {
   $('labelsInput').value = JSON.stringify(keep);
   csvLabels = [];
   syncCsvUi(keep.length);
+  updatePreview();
 });
 
 function renderScores(scores) {
