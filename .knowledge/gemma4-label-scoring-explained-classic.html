@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How Gemma 4 Picks the Best-Fitted Label — clipCC</title>
+<script>document.documentElement.classList.add('js');</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,9..144&family=Hanken+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0c0a12;
+  --bg-2:#13101c;
+  --bg-3:#1a1526;
+  --bg-4:#221b32;
+  --ink:#ECE6F2;
+  --ink-dim:#A79DB8;
+  --ink-faint:#6E6580;
+  --line:rgba(183,148,255,.14);
+  --line-strong:rgba(183,148,255,.28);
+  --violet:#B794FF;
+  --violet-deep:#7b1fa2;
+  --amber:#F2B05E;
+  --green:#79E0A8;
+  --red:#FF7A8A;
+  --sky:#79C7E0;
+  --display:'Fraunces',Georgia,serif;
+  --body:'Hanken Grotesk',-apple-system,system-ui,sans-serif;
+  --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
+  --maxw:920px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;
+  background:var(--bg);
+  color:var(--ink);
+  font-family:var(--body);
+  font-size:17px;
+  line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility;
+  overflow-x:hidden;
+}
+/* ---- atmosphere ---- */
+body::before{
+  content:"";position:fixed;inset:0;z-index:-2;
+  background:
+    radial-gradient(900px 600px at 78% -8%, rgba(123,31,162,.34), transparent 60%),
+    radial-gradient(760px 520px at 8% 6%, rgba(96,60,160,.20), transparent 62%),
+    radial-gradient(1200px 900px at 50% 120%, rgba(242,176,94,.07), transparent 60%),
+    var(--bg);
+}
+body::after{
+  content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background-image:radial-gradient(rgba(183,148,255,.075) 1px, transparent 1.4px);
+  background-size:26px 26px;
+  -webkit-mask-image:radial-gradient(ellipse 80% 70% at 50% 30%, #000 35%, transparent 100%);
+          mask-image:radial-gradient(ellipse 80% 70% at 50% 30%, #000 35%, transparent 100%);
+  opacity:.6;
+}
+.grain{position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.035;mix-blend-mode:overlay;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");}
+
+.wrap{position:relative;z-index:1;max-width:var(--maxw);margin:0 auto;padding:0 28px 120px}
+
+/* ---- type ---- */
+h1,h2,h3{font-family:var(--display);font-weight:500;letter-spacing:-.01em;line-height:1.08}
+.mono{font-family:var(--mono)}
+.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.26em;text-transform:uppercase;color:var(--violet);font-weight:500}
+a{color:var(--violet)}
+code{font-family:var(--mono);font-size:.86em;background:rgba(183,148,255,.10);border:1px solid var(--line);padding:.08em .4em;border-radius:5px;color:#E2D6FB}
+strong{color:#fff;font-weight:600}
+em{color:var(--amber);font-style:normal;font-weight:500}
+
+/* ---- hero ---- */
+header.hero{padding:88px 0 30px;border-bottom:1px solid var(--line)}
+.hero .eyebrow{display:flex;align-items:center;gap:12px;margin-bottom:26px}
+.hero .eyebrow::after{content:"";height:1px;flex:1;background:linear-gradient(90deg,var(--line-strong),transparent)}
+.hero h1{font-size:clamp(38px,6.4vw,68px);margin:0 0 22px;letter-spacing:-.025em}
+.hero h1 .accent{font-style:italic;color:var(--violet);font-weight:400}
+.hero .lede{font-size:clamp(18px,2.4vw,21px);color:var(--ink-dim);max-width:42ch;margin:0 0 30px}
+.chips{display:flex;flex-wrap:wrap;gap:9px}
+.chip{font-family:var(--mono);font-size:12px;color:var(--ink-dim);background:var(--bg-2);border:1px solid var(--line);border-radius:999px;padding:5px 13px;display:inline-flex;align-items:center;gap:7px}
+.chip b{color:var(--ink);font-weight:500}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--violet);box-shadow:0 0 9px var(--violet)}
+.dot.amber{background:var(--amber);box-shadow:0 0 9px var(--amber)}
+.dot.green{background:var(--green);box-shadow:0 0 9px var(--green)}
+
+/* ---- tl;dr ---- */
+.tldr{margin:42px 0 12px;background:linear-gradient(180deg,rgba(183,148,255,.08),rgba(183,148,255,.02));border:1px solid var(--line-strong);border-radius:16px;padding:26px 28px;position:relative;overflow:hidden}
+.tldr::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:linear-gradient(180deg,var(--violet),var(--amber))}
+.tldr .eyebrow{margin-bottom:12px}
+.tldr p{margin:0;font-size:18px;color:var(--ink)}
+
+/* ---- sections ---- */
+section{padding-top:64px}
+.sec-head{display:flex;align-items:baseline;gap:16px;margin-bottom:8px}
+.sec-num{font-family:var(--mono);font-size:13px;color:var(--violet);font-weight:600;letter-spacing:.1em}
+.sec-head h2{font-size:clamp(26px,3.6vw,34px);margin:0}
+.sec-sub{color:var(--ink-dim);max-width:62ch;margin:6px 0 26px;font-size:16.5px}
+p{margin:0 0 18px}
+.muted{color:var(--ink-dim)}
+
+/* ---- contrast cards ---- */
+.duo{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.vs{position:relative}
+.vs::after{content:"vs";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-family:var(--display);font-style:italic;font-size:20px;color:var(--ink-faint);background:var(--bg);border:1px solid var(--line);width:42px;height:42px;border-radius:50%;display:grid;place-items:center;z-index:2}
+.panel{background:var(--bg-2);border:1px solid var(--line);border-radius:14px;padding:22px 22px 20px}
+.panel.cool{border-color:rgba(121,199,224,.22)}
+.panel.warm{border-color:rgba(183,148,255,.26)}
+.panel h3{font-size:18px;margin:0 0 4px;font-family:var(--body);font-weight:700}
+.panel .tag{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);display:block;margin-bottom:14px}
+.panel.cool h3{color:var(--sky)}
+.panel.warm h3{color:var(--violet)}
+.panel ul{margin:0;padding-left:18px;color:var(--ink-dim);font-size:15px;line-height:1.55}
+.panel li{margin-bottom:7px}
+.panel li b{color:var(--ink)}
+
+/* ---- pipeline schematic ---- */
+.pipe{position:relative;margin-top:10px;padding-left:8px}
+.stage{position:relative;display:grid;grid-template-columns:54px 1fr;gap:20px;padding-bottom:30px}
+.stage:last-child{padding-bottom:0}
+.rail{position:relative;display:flex;justify-content:center}
+.node{position:relative;z-index:2;width:42px;height:42px;border-radius:12px;background:var(--bg-3);border:1px solid var(--line-strong);display:grid;place-items:center;font-family:var(--mono);font-weight:600;font-size:15px;color:var(--violet);box-shadow:0 6px 22px rgba(0,0,0,.4)}
+.stage:not(:last-child) .rail::after{content:"";position:absolute;top:42px;bottom:-30px;left:50%;width:2px;transform:translateX(-50%);background:linear-gradient(180deg,var(--line-strong),var(--line))}
+.stage-body{background:var(--bg-2);border:1px solid var(--line);border-radius:14px;padding:18px 20px;transition:border-color .3s,transform .3s}
+.stage-body:hover{border-color:var(--line-strong);transform:translateY(-2px)}
+.stage-body h3{font-size:18.5px;margin:0 0 4px;font-family:var(--body);font-weight:700;color:#fff}
+.stage-body .what{color:var(--ink-dim);font-size:15.5px;margin:0 0 12px}
+.kv{display:flex;flex-wrap:wrap;gap:7px;margin-top:2px}
+.kv span{font-family:var(--mono);font-size:11.5px;color:var(--ink-dim);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:3px 9px}
+.kv span b{color:var(--amber);font-weight:500}
+.why{margin-top:12px;font-size:14px;color:var(--ink-faint);border-top:1px dashed var(--line);padding-top:10px}
+.why b{color:var(--violet);font-weight:500}
+
+/* ---- code & formula ---- */
+pre{margin:16px 0;background:#08060d;border:1px solid var(--line);border-radius:12px;padding:18px 20px;overflow-x:auto;font-family:var(--mono);font-size:13.5px;line-height:1.6;color:#D7CDEC}
+pre .c{color:var(--ink-faint)}
+pre .k{color:var(--violet)}
+pre .s{color:var(--green)}
+pre .n{color:var(--amber)}
+.codecap{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);margin:22px 0 -6px}
+.formula{background:var(--bg-2);border:1px solid var(--line-strong);border-radius:12px;padding:18px 22px;font-family:var(--mono);font-size:15px;color:var(--ink);margin:16px 0;text-align:center;letter-spacing:.01em}
+.formula b{color:var(--amber)}
+
+/* ---- worked example ---- */
+.example{background:linear-gradient(180deg,var(--bg-2),var(--bg));border:1px solid var(--line);border-radius:16px;padding:8px 26px 26px}
+.step{padding:20px 0;border-bottom:1px solid var(--line)}
+.step:last-child{border-bottom:none}
+.step .label{font-family:var(--mono);font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--violet);margin-bottom:8px}
+.frames{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+.frame{font-family:var(--mono);font-size:12.5px;background:var(--bg-3);border:1px solid var(--line);border-radius:7px;padding:6px 10px;color:var(--ink-dim)}
+.frame b{color:var(--amber);font-weight:500}
+/* result bars */
+.bars{margin-top:6px}
+.brow{display:flex;align-items:center;gap:12px;margin:9px 0}
+.brow .bl{width:150px;font-size:14px;color:var(--ink);flex-shrink:0}
+.btrack{flex:1;height:22px;background:var(--bg-3);border:1px solid var(--line);border-radius:6px;overflow:hidden;position:relative}
+.bfill{height:100%;border-radius:5px 0 0 5px;background:linear-gradient(90deg,var(--violet-deep),var(--violet));position:relative}
+.brow.best .bfill{background:linear-gradient(90deg,#9a3fd4,var(--amber))}
+.bval{width:46px;text-align:right;font-family:var(--mono);font-size:13.5px;color:var(--ink)}
+.brow.best .bval{color:var(--amber);font-weight:600}
+.crown{font-size:12px;color:var(--amber);font-family:var(--mono)}
+.evi{font-size:13px;color:var(--ink-faint);margin:0 0 4px 162px;font-style:italic}
+
+/* ---- tables ---- */
+.tbl{width:100%;border-collapse:collapse;margin:8px 0 4px;font-size:14.5px}
+.tbl th{text-align:left;font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);font-weight:500;padding:10px 14px;border-bottom:1px solid var(--line-strong)}
+.tbl td{padding:11px 14px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--ink-dim)}
+.tbl td:first-child{color:var(--ink)}
+.tbl tr:hover td{background:rgba(183,148,255,.03)}
+.tbl code{white-space:nowrap}
+.pill{font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:5px;border:1px solid var(--line)}
+.pill.you{color:var(--green);border-color:rgba(121,224,168,.3);background:rgba(121,224,168,.06)}
+.pill.op{color:var(--sky);border-color:rgba(121,199,224,.3);background:rgba(121,199,224,.06)}
+
+/* ---- callouts ---- */
+.note{display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:start;background:var(--bg-2);border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:0 12px 12px 0;padding:16px 20px;margin:16px 0;font-size:15px;color:var(--ink-dim)}
+.note .mk{font-family:var(--display);font-style:italic;font-size:22px;color:var(--amber);line-height:1}
+.note.violet{border-left-color:var(--violet)}
+.note.violet .mk{color:var(--violet)}
+.note b{color:var(--ink)}
+
+.disc{margin-top:14px;background:rgba(242,176,94,.06);border:1px solid rgba(242,176,94,.22);border-radius:12px;padding:18px 20px;font-size:14.5px;color:#E8D9C2}
+.disc .eyebrow{color:var(--amber);margin-bottom:8px}
+
+/* ---- footer ---- */
+footer{margin-top:80px;padding-top:28px;border-top:1px solid var(--line);color:var(--ink-faint);font-size:13.5px}
+footer .files{font-family:var(--mono);font-size:12.5px;line-height:1.9;color:var(--ink-dim);margin-top:12px}
+footer .files b{color:var(--violet);font-weight:500}
+
+/* ---- reveal ---- */
+.js .reveal{opacity:0;transform:translateY(18px)}
+.js .reveal.in{opacity:1;transform:none;transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)}
+@media (prefers-reduced-motion:reduce){
+  .js .reveal{opacity:1;transform:none}
+  html{scroll-behavior:auto}
+}
+@media (max-width:680px){
+  body{font-size:16px}
+  .wrap{padding:0 18px 80px}
+  .duo{grid-template-columns:1fr}
+  .vs::after{display:none}
+  .stage{grid-template-columns:40px 1fr;gap:14px}
+  .node{width:38px;height:38px}
+  .stage:not(:last-child) .rail::after{top:38px}
+  .brow .bl{width:96px;font-size:13px}
+  .evi{margin-left:108px}
+  .example{padding:8px 16px 18px}
+}
+</style>
+</head>
+<body>
+<div class="grain"></div>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow reveal">clipCC · Technical Note · Gemma 4 E2B</div>
+    <h1 class="reveal">How Gemma decides<br>the <span class="accent">best-fitted</span> label</h1>
+    <p class="lede reveal">A generative vision-language model doesn't <em>measure</em> your labels against the video. It <em>looks</em> at the frames and <em>writes down</em> a score for each. This note traces that calculation, end to end.</p>
+    <div class="chips reveal">
+      <span class="chip"><span class="dot"></span><b>google/gemma-4-E2B-it</b></span>
+      <span class="chip"><span class="dot amber"></span>semantics:&nbsp;<b>verbalized · uncalibrated</b></span>
+      <span class="chip"><span class="dot green"></span>endpoint:&nbsp;<b>/api/v1/gemma/label_scores</b></span>
+    </div>
+  </header>
+
+  <div class="tldr reveal">
+    <div class="eyebrow">The one thing to remember</div>
+    <p>The “best-fitted” label is simply the one Gemma <strong>assigns the highest number to</strong> — and that number is <strong>text the model generated</strong>, not a similarity it computed. There is no embedding distance, no softmax, no probability. Eight frames go in; a small JSON array of self-reported 0&#8202;–&#8202;1 scores comes out; the label with the largest score wins.</p>
+  </div>
+
+  <!-- ============================================================ -->
+  <section id="bigidea">
+    <div class="sec-head reveal"><span class="sec-num">01</span><h2>Two very different ways to score</h2></div>
+    <p class="sec-sub reveal">clipCC ships two models on two pages. They answer the same question — “how well does this label fit?” — with completely different machinery. Knowing which one you're on changes how you read the numbers.</p>
+    <div class="duo reveal">
+      <div class="panel cool vs">
+        <span class="tag">/ · the SigLIP2 page</span>
+        <h3>It measures</h3>
+        <ul>
+          <li>Encodes the image and the text into <b>vectors</b>, then takes their similarity.</li>
+          <li>A <b>sigmoid</b> turns that similarity into a 0&#8202;–&#8202;1 score, <b>independently per label</b>.</li>
+          <li>Scores are a real, repeatable <b>computation</b> over embeddings.</li>
+          <li>Calibrated enough to compare across runs; threshold at <b>0.5</b>.</li>
+        </ul>
+      </div>
+      <div class="panel warm">
+        <span class="tag">/gemma · this page</span>
+        <h3>It reads &amp; reports</h3>
+        <ul>
+          <li>Sees the <b>actual frames</b> plus your labels as one prompt.</li>
+          <li><b>Generates</b> a JSON array — it literally writes a number for each label.</li>
+          <li>The score is a <b>verbalized self-report</b>: judgment, not arithmetic.</li>
+          <li>Uncalibrated &amp; quantized to round numbers. Read it as a <b>ranking</b>, not a probability.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="note violet reveal"><span class="mk">&#10022;</span><div>Because the score is generated text, the whole “calculation” is really a <b>prompt + a decode loop + a strict parser</b>. The next section walks every stage of it.</div></div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="pipeline">
+    <div class="sec-head reveal"><span class="sec-num">02</span><h2>The calculation, stage by stage</h2></div>
+    <p class="sec-sub reveal">One request to <code>POST /api/v1/gemma/label_scores</code> (a video + a JSON list of labels + an optional window start) flows through seven stages. The model must be <b>warmed</b> first — it loads once, on demand, and stays resident.</p>
+
+    <div class="pipe">
+
+      <div class="stage reveal">
+        <div class="rail"><div class="node">1</div></div>
+        <div class="stage-body">
+          <h3>Admit &amp; guard the request</h3>
+          <p class="what">Two checkpoints, in order. <b>Before any video work:</b> the extension, the label list, and the slot state are checked — the slot must already be <code>loaded</code> or the call is refused with <code>503</code>. <b>Then the upload is saved and probed with ffprobe</b>, and only now are duration, resolution, and stream count validated.</p>
+          <div class="kv">
+            <span>up-front: ext &#8712; <b>mp4·avi·mov·mkv</b></span>
+            <span>up-front: labels <b>1&#8211;50</b>, non-empty, unique</span>
+            <span>up-front: slot <b>loaded</b> (else 503)</span>
+            <span>after probe: duration &#8804; <b>300s</b></span>
+            <span>after probe: &#8804; <b>3840×2160</b> &amp; &#8804; <b>8.3MP</b></span>
+            <span>after probe: single video stream</span>
+          </div>
+          <p class="why"><b>Why:</b> Gemma samples a fixed number of frames from a window, so the usual “frames-vs-duration” rule is skipped — only the hard safety limits apply. Note the file is accepted and probed <b>before</b> the resolution/duration verdict, not gated ahead of upload.</p>
+        </div>
+      </div>
+
+      <div class="stage reveal">
+        <div class="rail"><div class="node">2</div></div>
+        <div class="stage-body">
+          <h3>Choose the analysis window</h3>
+          <p class="what">Gemma never looks at the whole video. It analyzes a single <b>60-second window</b> that begins at the <code>window_start</code> you provide (default <code>0</code>), clamped to the video's end.</p>
+          <div class="formula">window = [ <b>window_start</b> , min(duration, window_start + <b>60</b>) ]</div>
+          <div class="kv">
+            <span>window_start must be <b>&#8805; 0</b> and <b>&lt; duration</b></span>
+            <span>length = <b>gemma_analysis_window_seconds = 60.0</b></span>
+          </div>
+          <p class="why"><b>Why:</b> A VLM has a finite image budget. A bounded window keeps the frame set small, sharp, and within the prompt — and lets you aim the analysis at the part of the clip you care about.</p>
+        </div>
+      </div>
+
+      <div class="stage reveal">
+        <div class="rail"><div class="node">3</div></div>
+        <div class="stage-body">
+          <h3>Plan the frame timestamps</h3>
+          <p class="what">The window is cut into <b>N equal slices</b> and one frame is taken from the <b>midpoint</b> of each. By default N&nbsp;=&nbsp;8. A 0.5&#8202;s spacing floor collapses N on very short windows so two frames are never visually redundant.</p>
+          <div class="formula">N = min(N<sub>max</sub>, max(1, &#8970;span / 0.5&#8971;)) &nbsp;·&nbsp; tᵢ = window_start + (i + <b>0.5</b>) · span/N</div>
+          <div class="kv">
+            <span>frames = <b>effective_gemma_max_frames = min(8, 16)</b></span>
+            <span>spacing floor = <b>0.5s</b></span>
+            <span>timestamps rounded to <b>3 dp</b></span>
+          </div>
+          <p class="why"><b>Why:</b> Uniform <b>midpoint</b> sampling gives even, deterministic coverage of the window. These exact timestamps are the closed set the model is told it is seeing, in order.</p>
+        </div>
+      </div>
+
+      <div class="stage reveal">
+        <div class="rail"><div class="node">4</div></div>
+        <div class="stage-body">
+          <h3>Extract &amp; downscale the frames</h3>
+          <p class="what">One fast ffmpeg seek per timestamp (<code>-ss</code> before <code>-i</code>) grabs a single frame, downscaled so its longest side is at most <b>896&#8202;px</b> with aspect ratio preserved, saved as high-quality JPEG.</p>
+          <div class="kv">
+            <span>scale <b>min(896, iw/ih)</b>, keep aspect</span>
+            <span>JPEG <b>-q:v 2</b></span>
+            <span>per-seek timeout <b>120s</b></span>
+          </div>
+          <p class="why"><b>Why:</b> The 896&#8202;px ceiling is a <b>hard-coded ffmpeg scale filter</b> — large enough to read behavior, small enough for the vision encoder. It is what actually bounds image size today; the <code>gemma_image_token_budget</code> setting is not yet wired into the processor. No frames extracted &rarr; the request fails fast.</p>
+        </div>
+      </div>
+
+      <div class="stage reveal">
+        <div class="rail"><div class="node">5</div></div>
+        <div class="stage-body">
+          <h3>Build the scoring prompt</h3>
+          <p class="what">Your labels are <b>numbered 1&#8230;N</b> and dropped into a fixed instruction that demands a strict JSON array — one object per id, each with a score from <b>0.0 to 1.0</b>. The prompt also <b>asks</b> the model to add a one-sentence <b>evidence</b> note to its <code>k</code> highest-scored labels — a request, not a step the system enforces.</p>
+          <div class="kv">
+            <span>question per label: “how strongly is this <b>visible anywhere</b> in the frames?”</span>
+            <span>evidence on top <b>k = 3</b> (model-requested)</span>
+            <span>token budget = <b>min(64 + 24·N, 1280)</b></span>
+          </div>
+          <p class="why"><b>Why:</b> Numbering by id (not by text) makes the output <b>order-independent and unambiguous</b> to parse, and lets the parser reject anything that doesn't map back to a real label.</p>
+        </div>
+      </div>
+
+      <div class="stage reveal">
+        <div class="rail"><div class="node">6</div></div>
+        <div class="stage-body">
+          <h3>Generate the scores</h3>
+          <p class="what">The frames (as images) and the prompt go in as a <b>single multimodal turn</b>. Gemma decodes the answer <b>greedily</b> — no sampling — so the same input gives the same scores. This decode loop <em>is</em> the calculation.</p>
+          <div class="kv">
+            <span><b>do_sample = False</b> (deterministic)</span>
+            <span><b>enable_thinking = False</b> (chat template)</span>
+            <span>dtype <b>bf16</b> on GPU/MPS · <b>fp32</b> on CPU</span>
+            <span>max_new_tokens = <b>budget</b></span>
+          </div>
+          <p class="why"><b>Why:</b> Greedy decoding makes results reproducible. The “thinking channel” is disabled because its stray tokens would corrupt the JSON. The request timeout is <b>soft</b> — checked between tokens — so <code>max_new_tokens</code> is the real bound.</p>
+        </div>
+      </div>
+
+      <div class="stage reveal">
+        <div class="rail"><div class="node">7</div></div>
+        <div class="stage-body">
+          <h3>Parse, validate, and rank</h3>
+          <p class="what">The text is stripped of code fences, sliced to the outermost <code>[ … ]</code>, and parsed <b>strictly</b>. Each item must be an object with a known, unique id and a numeric score in range. A bad parse triggers exactly <b>one retry</b>; a second failure is an error.</p>
+          <div class="kv">
+            <span>reject: unknown id · duplicate id · non-numeric / out-of-range score</span>
+            <span>missing id &rarr; <b>score = null</b> (shown “n/a”)</span>
+            <span>retries = <b>0 or 1</b></span>
+          </div>
+          <p class="why"><b>Why:</b> Scores return in your <b>original label order</b>. The <em>best-fitted label is the one with the highest score</em> — picked by you from the ranked list, since the scores are independent and need not sum to anything.</p>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="example">
+    <div class="sec-head reveal"><span class="sec-num">03</span><h2>A worked example</h2></div>
+    <p class="sec-sub reveal">A 90-second dashcam clip. You set <code>window_start = 10</code> and submit three labels. Here is exactly what the system computes.</p>
+
+    <div class="example reveal">
+      <div class="step">
+        <div class="label">Input</div>
+        <p style="margin:0;color:var(--ink-dim)">video duration <b style="color:var(--ink)">90s</b> · window_start <b style="color:var(--ink)">10</b> · labels <code>["texting while driving", "sleeping while driving", "eating while driving"]</code></p>
+      </div>
+
+      <div class="step">
+        <div class="label">Stage 2 — window</div>
+        <p style="margin:0;color:var(--ink-dim)">[ 10 , min(90, 10+60) ] = <b style="color:var(--amber)">[10s, 70s]</b> &nbsp;→&nbsp; span = 60s</p>
+      </div>
+
+      <div class="step">
+        <div class="label">Stage 3 — 8 midpoint timestamps (slice = 60/8 = 7.5s)</div>
+        <div class="frames">
+          <span class="frame">f0 <b>13.75s</b></span>
+          <span class="frame">f1 <b>21.25s</b></span>
+          <span class="frame">f2 <b>28.75s</b></span>
+          <span class="frame">f3 <b>36.25s</b></span>
+          <span class="frame">f4 <b>43.75s</b></span>
+          <span class="frame">f5 <b>51.25s</b></span>
+          <span class="frame">f6 <b>58.75s</b></span>
+          <span class="frame">f7 <b>66.25s</b></span>
+        </div>
+      </div>
+
+      <div class="step">
+        <div class="label">Stage 5 — the prompt Gemma receives (with the 8 frames)</div>
+        <pre><span class="c">You are analyzing frames sampled from a video, in chronological order.</span>
+<span class="c">Score how strongly each numbered behavior below is visible anywhere in these frames.</span>
+
+Behaviors:
+<span class="n">1</span>: texting while driving
+<span class="n">2</span>: sleeping while driving
+<span class="n">3</span>: eating while driving
+
+Respond with ONLY a JSON array, no other text. One object per behavior id:
+[{<span class="s">"id"</span>: &lt;behavior number&gt;, <span class="s">"score"</span>: &lt;number from 0.0 to 1.0&gt;}]
+For the <span class="n">3</span> highest-scoring behaviors only, add an <span class="s">"evidence"</span> field: one short sentence...
+Scores must be JSON numbers, not strings. Include every id exactly once.</pre>
+      </div>
+
+      <div class="step">
+        <div class="label">Stage 6 — what the model writes back</div>
+        <pre>[{<span class="s">"id"</span>: <span class="n">1</span>, <span class="s">"score"</span>: <span class="n">0.8</span>, <span class="s">"evidence"</span>: <span class="s">"The driver holds a phone in their right hand near the wheel."</span>},
+ {<span class="s">"id"</span>: <span class="n">2</span>, <span class="s">"score"</span>: <span class="n">0.1</span>},
+ {<span class="s">"id"</span>: <span class="n">3</span>, <span class="s">"score"</span>: <span class="n">0.0</span>}]</pre>
+      </div>
+
+      <div class="step">
+        <div class="label">Stage 7 — parsed, ranked, rendered</div>
+        <div class="bars">
+          <div class="brow best">
+            <div class="bl">texting <span class="crown">&#9670; best</span></div>
+            <div class="btrack"><div class="bfill" style="width:80%"></div></div>
+            <div class="bval">0.80</div>
+          </div>
+          <p class="evi">“The driver holds a phone in their right hand near the wheel.”</p>
+          <div class="brow">
+            <div class="bl">sleeping</div>
+            <div class="btrack"><div class="bfill" style="width:10%"></div></div>
+            <div class="bval">0.10</div>
+          </div>
+          <div class="brow">
+            <div class="bl">eating</div>
+            <div class="btrack"><div class="bfill" style="width:0%"></div></div>
+            <div class="bval">0.00</div>
+          </div>
+        </div>
+        <p style="margin:14px 0 0;color:var(--ink-dim);font-size:15px"><b style="color:var(--ink)">Best-fitted label = “texting while driving”</b> — it carries the largest generated score. Note the scores total 0.9, not 1.0: each is judged on its own.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="meaning">
+    <div class="sec-head reveal"><span class="sec-num">04</span><h2>What the winning score actually means</h2></div>
+    <p class="sec-sub reveal">The bar that fills the most is the answer — but read it for what it is.</p>
+    <p class="reveal"><strong>It's a ranking signal, not a probability.</strong> The model is asked to rate each behavior <em>independently</em> (“how strongly is each visible”), so the scores don't form a distribution and won't sum to 1. Two labels can both read 0.8; none has to.</p>
+    <p class="reveal"><strong>It's quantized and uncalibrated.</strong> Generative models gravitate to round numbers — 0.0, 0.5, 0.8 — so treat the values as <em>ordinal</em>: higher beats lower, but the gap between 0.7 and 0.8 isn't a precise 0.1 of anything. And a Gemma 0.8 is <em>not</em> comparable in magnitude to a SigLIP2 0.8.</p>
+    <p class="reveal"><strong>It's implicitly contrastive.</strong> Even though each label is rated on its own, the model sees all of them at once in one prompt, so its scores are quietly relative to the set you submitted. Change the label list and the numbers can shift.</p>
+
+    <div class="disc reveal">
+      <div class="eyebrow">Score semantics — <span class="mono">gemma4_verbalized_uncalibrated</span></div>
+      Scores are verbalized self-reports from a generative model: uncalibrated, quantized to round numbers, and implicitly contrastive across labels. Treat as ordinal. NOT comparable in magnitude to SigLIP2 sigmoid scores. Not suitable for safety-critical decisions.
+    </div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="variables">
+    <div class="sec-head reveal"><span class="sec-num">05</span><h2>The variables you can set</h2></div>
+    <p class="sec-sub reveal">Two tiers. The first you control on every request through the web UI; the second an operator sets once via environment variables. Notably, <b>frame count and window length are not per-request</b> — only where the window starts is.</p>
+
+    <h3 class="reveal" style="font-size:18px;margin:24px 0 4px;color:var(--green)">Per request <span class="pill you mono">you · in the UI</span></h3>
+    <table class="tbl reveal">
+      <thead><tr><th>Variable</th><th>Field / form key</th><th>Default · limits</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td>Video</td><td><code>video</code></td><td>required · mp4/avi/mov/mkv</td><td>The clip to analyze.</td></tr>
+        <tr><td>Analysis window start</td><td><code>window_start</code></td><td><code>0</code> · 0 &#8804; x &lt; duration</td><td>Where the fixed 60&#8202;s window begins.</td></tr>
+        <tr><td>Mode</td><td><code>modeSelect</code></td><td><code>label_scores</code> | <code>qa</code></td><td>Score labels, or ask a free-form question.</td></tr>
+        <tr><td>Labels</td><td><code>labels</code> (JSON array)</td><td><b>1&#8211;50</b> · non-empty, unique · CSV import</td><td>The behaviors to score &amp; rank. Empty list, blank, or duplicate &rarr; <code>422</code>.</td></tr>
+        <tr><td>Question <span class="muted">(qa mode)</span></td><td><code>prompt</code></td><td>1&#8211;2000 chars</td><td>Free-form question; returns prose, no scores.</td></tr>
+      </tbody>
+    </table>
+
+    <h3 class="reveal" style="font-size:18px;margin:30px 0 4px;color:var(--sky)">System configuration <span class="pill op mono">operator · env vars</span></h3>
+    <table class="tbl reveal">
+      <thead><tr><th>Env var</th><th>Default</th><th>Controls</th></tr></thead>
+      <tbody>
+        <tr><td><code>gemma_analysis_window_seconds</code></td><td><code>60.0</code></td><td>Length of the analysis window.</td></tr>
+        <tr><td><code>gemma_max_frames</code> / <code>_cap</code></td><td><code>8</code> / <code>16</code></td><td>Frames sampled (effective = the min of the two).</td></tr>
+        <tr><td><code>gemma_max_labels</code></td><td><code>50</code></td><td>Hard cap on labels per request.</td></tr>
+        <tr><td><code>gemma_evidence_top_k</code></td><td><code>3</code></td><td>How many top labels the prompt <i>asks</i> the model to justify with evidence (requested, not enforced).</td></tr>
+        <tr><td><code>gemma_max_new_tokens_qa</code></td><td><code>400</code></td><td>Generation budget for Q&amp;A mode.</td></tr>
+        <tr><td><code>gemma_image_token_budget</code></td><td><code>280</code></td><td>Reserved — not yet wired into the processor call; currently a no-op. Image size is bounded by the 896&#8202;px ffmpeg scale instead.</td></tr>
+        <tr><td><code>gemma_model_id</code></td><td><code>google/gemma-4-E2B-it</code></td><td>Which checkpoint the slot loads.</td></tr>
+        <tr><td><code>gemma_enabled</code> · <code>gemma_reserve_gb</code></td><td><code>true</code> · <code>12.0</code></td><td>Slot on/off · memory reserved in the residency ledger.</td></tr>
+        <tr><td><code>max_duration_seconds</code> · <code>request_timeout_seconds</code></td><td><code>300</code> · <code>300</code></td><td>Longest accepted clip · soft request deadline.</td></tr>
+      </tbody>
+    </table>
+
+    <div class="note reveal"><span class="mk">&#9888;</span><div>The label-scores token budget grows with your label count — <code>min(64 + 24·N, 1280)</code> — so all 50 labels still fit in one un-truncated JSON reply. The budget is derived, not user-set.</div></div>
+  </section>
+
+  <!-- ============================================================ -->
+  <section id="edges">
+    <div class="sec-head reveal"><span class="sec-num">06</span><h2>Good to know at the edges</h2></div>
+    <table class="tbl reveal">
+      <thead><tr><th>Situation</th><th>What happens</th></tr></thead>
+      <tbody>
+        <tr><td>Model omits a label id</td><td>That label's score becomes <code>null</code> and renders as <b>n/a</b> — not zero.</td></tr>
+        <tr><td>Very short window</td><td>The 0.5&#8202;s spacing floor caps N below 8 (e.g. a 3&#8202;s window yields 6 frames), so you never get redundant near-identical frames.</td></tr>
+        <tr><td>Malformed JSON from the model</td><td>Prose around the array is tolerated (sliced to the brackets); a genuinely bad parse buys exactly <b>one</b> regeneration, then a <code>502</code> (“Gemma output unusable”).</td></tr>
+        <tr><td>Window past the clip end</td><td><code>window_start &#8805; duration</code> is rejected as invalid before any work starts.</td></tr>
+        <tr><td>Slot not warmed</td><td>Scoring calls return <code>503</code> until <code>POST /api/v1/gemma/warm</code> finishes loading (~minutes on first run; load-once, then resident).</td></tr>
+        <tr><td>Request runs long</td><td>The timeout is a <b>soft</b> deadline checked between decode steps; the response carries per-stage latency and the retry count.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer class="reveal">
+    <div>This note describes clipCC's Gemma 4 E2B exploration path as implemented. It is a one-read orientation, not API reference — field names and limits trace to the source below.</div>
+    <div class="files">
+      <b>window &amp; frames</b> &nbsp;app/services/gemma_sampler.py<br>
+      <b>prompt &amp; strict parse</b> &nbsp;app/services/gemma_prompts.py<br>
+      <b>generation</b> &nbsp;app/models/gemma_vlm.py &nbsp;·&nbsp; <b>load-once slot</b> &nbsp;app/models/vlm_slot.py<br>
+      <b>pipeline &amp; routes</b> &nbsp;app/main.py &nbsp;·&nbsp; <b>score semantics</b> &nbsp;app/schemas/gemma.py &nbsp;·&nbsp; <b>defaults</b> &nbsp;app/config.py
+    </div>
+  </footer>
+
+</div>
+
+<script>
+(function(){
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target); } });
+  }, {rootMargin:'0px 0px -8% 0px', threshold:.08});
+  document.querySelectorAll('.reveal').forEach(function(el,i){
+    // gentle stagger for the hero cluster
+    if(i<6) el.style.transitionDelay=(i*70)+'ms';
+    io.observe(el);
+  });
+})();
+</script>
+</body>
+</html>
