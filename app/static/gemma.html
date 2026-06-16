@@ -7,9 +7,12 @@
 <style>
   body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background: #f5f6f8; color: #1c1e21; }
   .container { max-width: 860px; margin: 0 auto; padding: 24px; }
-  nav { margin-bottom: 16px; border-bottom: 1px solid #ddd; padding-bottom: 8px; }
+  nav { display: flex; align-items: center; margin-bottom: 16px; border-bottom: 1px solid #ddd; padding-bottom: 8px; }
   nav a { margin-right: 16px; text-decoration: none; color: #1a73e8; }
   nav a.active { font-weight: bold; color: #1c1e21; }
+  .reset-all { margin: 0 0 0 auto; background: #f3f4f6; color: #374151; border: 1px solid #d0d0d0;
+               border-radius: 4px; padding: 5px 12px; font-size: 13px; }
+  .reset-all:hover { background: #fee2e2; border-color: #dc2626; color: #dc2626; }
   .card { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
   .status-pill { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 13px; }
   .status-idle { background: #eee; } .status-loading { background: #fff3cd; }
@@ -83,6 +86,7 @@
   <nav>
     <a href="/">SigLIP2</a>
     <a href="/gemma" class="active">Gemma 4</a>
+    <button id="resetAllBtn" type="button" class="reset-all" title="Clear this page's saved settings">Reset All</button>
   </nav>
 
   <div class="card">
@@ -192,6 +196,7 @@ $('modeSelect').addEventListener('change', () => {
 $('resetInstructionBtn').addEventListener('click', () => {
   $('instructionInput').value = defaultInstruction;
   updatePreview();
+  saveState();
 });
 
 // Label chips — same enable/disable-by-click behavior as the SigLIP2 page.
@@ -200,6 +205,53 @@ $('resetInstructionBtn').addEventListener('click', () => {
 let defaultLabels = [];
 let selectedLabels = {};
 let csvLabels = [];
+
+// ---- per-page state persistence (localStorage; independent from SigLIP2) ----
+const GKEY = 'clipcc.gemma.v1';
+let savedState = null;
+try { savedState = JSON.parse(localStorage.getItem(GKEY)); } catch (e) { savedState = null; }
+
+function saveState() {
+  try {
+    localStorage.setItem(GKEY, JSON.stringify({
+      windowStart: $('windowStart').value,
+      mode: $('modeSelect').value,
+      labelsInput: $('labelsInput').value,
+      instruction: $('instructionInput').value,
+      prompt: $('promptInput').value,
+      csvLabels: csvLabels,
+      disabled: defaultLabels.concat(csvLabels).filter((l) => !selectedLabels[l]),
+    }));
+  } catch (e) {}
+}
+
+// Restore the synchronous fields now; chip selection is applied once the preset
+// chips exist (after the defaults fetch below).
+if (savedState) {
+  if (typeof savedState.windowStart === 'string') $('windowStart').value = savedState.windowStart;
+  if (typeof savedState.labelsInput === 'string') $('labelsInput').value = savedState.labelsInput;
+  if (typeof savedState.prompt === 'string') $('promptInput').value = savedState.prompt;
+  if (typeof savedState.instruction === 'string') {
+    $('instructionInput').value = savedState.instruction;
+    instructionInitialized = true;   // keep restored text; don't let status prefill overwrite it
+  }
+  if (Array.isArray(savedState.csvLabels)) csvLabels = savedState.csvLabels.slice();
+  if (typeof savedState.mode === 'string') {
+    $('modeSelect').value = savedState.mode;
+    const qa = savedState.mode === 'qa';
+    $('labelsField').style.display = qa ? 'none' : '';
+    $('promptField').style.display = qa ? '' : 'none';
+  }
+}
+
+function applySavedChipSelection() {
+  if (!savedState || !Array.isArray(savedState.disabled)) return;
+  const dis = new Set(savedState.disabled);
+  [...$('labelChips').children].forEach((chip) => {
+    if (dis.has(chip.textContent)) { selectedLabels[chip.textContent] = false; chip.classList.remove('active'); }
+  });
+  updatePreview();
+}
 
 function renderLabelChips(labels, extraClass) {
   labels.forEach((lbl) => {
@@ -214,6 +266,7 @@ function renderLabelChips(labels, extraClass) {
       selectedLabels[lbl] = !selectedLabels[lbl];
       chip.className = selectedLabels[lbl] ? cls + ' active' : cls;
       updatePreview();
+      saveState();
     });
     $('labelChips').appendChild(chip);
   });
@@ -262,6 +315,7 @@ $('csvInput').addEventListener('change', () => {
     const lines = e.target.result.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
     lines.forEach((lbl) => { if (csvLabels.indexOf(lbl) === -1) csvLabels.push(lbl); });
     rebuildChips();
+    saveState();
   };
   reader.readAsText(file);
   $('csvInput').value = '';
@@ -270,15 +324,17 @@ $('csvInput').addEventListener('change', () => {
 $('csvClearBtn').addEventListener('click', () => {
   csvLabels = [];
   rebuildChips();
+  saveState();
 });
 
 // Preset labels (same source as the SigLIP2 page); fall back to the driving set.
 fetch('/api/v1/labels/defaults')
   .then((r) => r.json())
-  .then((data) => { defaultLabels = (data && data.labels) || []; rebuildChips(); })
+  .then((data) => { defaultLabels = (data && data.labels) || []; rebuildChips(); applySavedChipSelection(); })
   .catch(() => {
     defaultLabels = ['texting while driving', 'sleeping while driving', 'eating while driving'];
     rebuildChips();
+    applySavedChipSelection();
   });
 
 function renderScores(scores) {
@@ -354,6 +410,18 @@ $('runBtn').addEventListener('click', async () => {
     $('runBtn').disabled = false;
     $('runBtn').textContent = 'Analyze';
     fetchStatus();
+  }
+});
+
+// Persist text-input / select changes (chips, CSV and reset save explicitly).
+document.querySelector('.container').addEventListener('input', saveState);
+document.querySelector('.container').addEventListener('change', saveState);
+
+// Reset All — clears only this page's saved state, then reloads to defaults.
+$('resetAllBtn').addEventListener('click', () => {
+  if (confirm("Reset this page's saved settings to defaults?")) {
+    try { localStorage.removeItem(GKEY); } catch (e) {}
+    location.reload();
   }
 });
 

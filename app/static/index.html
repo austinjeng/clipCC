@@ -52,6 +52,9 @@ button {
 }
 button:hover { background: #1d4ed8; }
 button:disabled { background: #93b4f5; cursor: not-allowed; }
+.reset-all { margin: 0 0 0 auto; background: #f3f4f6; color: #374151; border: 1px solid #d0d0d0;
+             border-radius: 4px; padding: 0.35rem 0.75rem; font-size: 0.85rem; }
+.reset-all:hover { background: #fee2e2; border-color: #dc2626; color: #dc2626; }
 .status-row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.5rem; font-size: 0.85rem; color: #555; }
 .dot {
   width: 10px; height: 10px;
@@ -350,9 +353,10 @@ input[type="range"] {
 <body>
 <div class="container">
   <h1>clipCC</h1>
-  <nav style="margin-bottom:16px;border-bottom:1px solid #ddd;padding-bottom:8px;">
+  <nav style="display:flex;align-items:center;margin-bottom:16px;border-bottom:1px solid #ddd;padding-bottom:8px;">
     <a href="/" style="font-weight:bold;margin-right:16px;">SigLIP2</a>
     <a href="/gemma" style="margin-right:16px;">Gemma 4</a>
+    <button id="reset-all-btn" type="button" class="reset-all" title="Clear this page's saved settings">Reset All</button>
   </nav>
 
   <!-- Model Section -->
@@ -593,6 +597,43 @@ input[type="range"] {
   var thresholdDirty = false;
   var activeChart = null;
 
+  // ---- per-page state persistence (localStorage; independent from Gemma) ----
+  var SKEY = 'clipcc.siglip2.v1';
+  var savedState = null;
+  try { savedState = JSON.parse(localStorage.getItem(SKEY)); } catch (e) { savedState = null; }
+
+  function saveState() {
+    try {
+      localStorage.setItem(SKEY, JSON.stringify({
+        model: modelSelect.value,
+        labelsInput: labelsInput.value,
+        csvLabels: csvLabels,
+        disabled: defaultLabels.concat(csvLabels).filter(function (l) { return !selectedLabels[l]; }),
+        prompt: promptInput.value,
+        fps: fpsInput.value,
+        agg: aggSelect.value,
+        thresholdDirty: thresholdDirty,
+        threshold: thresholdSlider.value,
+        gap: gapSlider.value,
+        mindur: mindurSlider.value,
+        posLabels: posLabels,
+        negLabels: negLabels,
+        contrastThresholdDirty: contrastThresholdDirty,
+        contrastThreshold: contrastThresholdSlider.value,
+        contrastReduce: contrastReduceSelect.value
+      }));
+    } catch (e) {}
+  }
+
+  function applySavedChipSelection() {
+    if (!savedState || !Array.isArray(savedState.disabled)) return;
+    var dis = {};
+    savedState.disabled.forEach(function (l) { dis[l] = true; });
+    Array.prototype.forEach.call(labelChips.children, function (chip) {
+      if (dis[chip.textContent]) { selectedLabels[chip.textContent] = false; chip.classList.remove('active'); }
+    });
+  }
+
   // -------------------------
   // Status helpers
   // -------------------------
@@ -637,6 +678,7 @@ input[type="range"] {
       chip.addEventListener('click', function () {
         selectedLabels[lbl] = !selectedLabels[lbl];
         chip.className = selectedLabels[lbl] ? cls + ' active' : cls;
+        saveState();
       });
       labelChips.appendChild(chip);
     });
@@ -660,10 +702,9 @@ input[type="range"] {
         temporalDefaults = data.temporal_defaults || null;
         applyTemporalDefaults();
         var cd = data.contrast_defaults || null;
-        if (cd) {
+        if (cd && !contrastThresholdDirty) {
           contrastThresholdSlider.value = cd.threshold;
           contrastThresholdValue.textContent = cd.threshold.toFixed(2);
-          contrastThresholdDirty = false;
           contrastThresholdDefaultTag.style.display = '';
         }
       })
@@ -675,7 +716,7 @@ input[type="range"] {
   function applyTemporalDefaults() {
     if (!temporalDefaults) return;
     var defaultThresh = temporalDefaults.threshold;
-    if (typeof defaultThresh === 'number') {
+    if (typeof defaultThresh === 'number' && !thresholdDirty) {
       thresholdSlider.value = defaultThresh;
       thresholdValue.textContent = defaultThresh.toFixed(2);
     }
@@ -685,9 +726,8 @@ input[type="range"] {
     } else {
       thresholdTooltipCard.textContent = 'Minimum confidence for event detection. SigLip2 sigmoid scores are directly interpretable — 0.5 means the model is neutral. Higher = stricter.';
     }
-    // Reset dirty state — just loaded defaults
-    thresholdDirty = false;
-    thresholdDefaultTag.style.display = '';
+    // Keep a user override (restored or live); only show the default tag when clean.
+    if (!thresholdDirty) thresholdDefaultTag.style.display = '';
   }
 
   // -------------------------
@@ -749,6 +789,12 @@ input[type="range"] {
           fetchTemporalDefaults();
         }
       });
+      // restore the dropdown selection (does not auto-load the model)
+      if (savedState && savedState.model) {
+        for (var oi = 0; oi < modelSelect.options.length; oi++) {
+          if (modelSelect.options[oi].value === savedState.model) { modelSelect.value = savedState.model; break; }
+        }
+      }
     })
     .catch(function () {
       setStatus('none', 'Failed to fetch models');
@@ -759,6 +805,7 @@ input[type="range"] {
     .then(function (data) {
       defaultLabels = data.labels || [];
       rebuildChips();
+      applySavedChipSelection();
     })
     .catch(function () {
       labelsHint.textContent = 'Failed to load default labels.';
@@ -777,6 +824,7 @@ input[type="range"] {
         if (!existing[lbl]) csvLabels.push(lbl);
       });
       rebuildChips();
+      saveState();
     };
     reader.readAsText(file);
     csvInput.value = '';
@@ -785,6 +833,7 @@ input[type="range"] {
   csvClearBtn.addEventListener('click', function () {
     csvLabels = [];
     rebuildChips();
+    saveState();
   });
 
   // -------------------------
@@ -821,6 +870,7 @@ input[type="range"] {
         labels.splice(idx, 1);
         renderContrastChips(container, labels, cls);
         updateContrastCounters();
+        saveState();
       });
       chip.appendChild(x);
       container.appendChild(chip);
@@ -842,6 +892,7 @@ input[type="range"] {
     input.value = '';
     renderContrastChips(container, labelArr, cls);
     updateContrastCounters();
+    saveState();
   }
 
   posInput.addEventListener('keydown', function (e) {
@@ -864,6 +915,7 @@ input[type="range"] {
         renderContrastChips(container, labelArr, cls);
         updateContrastCounters();
         clearBtn.style.display = '';
+        saveState();
       };
       reader.readAsText(file);
       fileInput.value = '';
@@ -873,6 +925,7 @@ input[type="range"] {
       renderContrastChips(container, labelArr, cls);
       updateContrastCounters();
       clearBtn.style.display = 'none';
+      saveState();
     });
   }
 
@@ -1445,6 +1498,55 @@ input[type="range"] {
     table.appendChild(tbody);
     segTableWrap.appendChild(table);
   }
+
+  // -------------------------
+  // Restore saved state + persistence wiring
+  // -------------------------
+  function restoreState() {
+    if (!savedState) return;
+    if (typeof savedState.labelsInput === 'string') labelsInput.value = savedState.labelsInput;
+    if (Array.isArray(savedState.csvLabels)) csvLabels = savedState.csvLabels.slice();
+    if (typeof savedState.prompt === 'string') promptInput.value = savedState.prompt;
+    if (savedState.fps !== undefined && savedState.fps !== null) fpsInput.value = savedState.fps;
+    if (typeof savedState.agg === 'string') { aggSelect.value = savedState.agg; aggSelect.dispatchEvent(new Event('change')); }
+    if (savedState.thresholdDirty) {
+      thresholdDirty = true;
+      thresholdSlider.value = savedState.threshold;
+      thresholdValue.textContent = parseFloat(savedState.threshold).toFixed(2);
+      thresholdDefaultTag.style.display = 'none';
+    }
+    if (savedState.gap !== undefined && savedState.gap !== null) {
+      gapSlider.value = savedState.gap;
+      gapValue.textContent = parseFloat(savedState.gap).toFixed(1) + 's';
+    }
+    if (savedState.mindur !== undefined && savedState.mindur !== null) {
+      mindurSlider.value = savedState.mindur;
+      mindurValue.textContent = parseFloat(savedState.mindur).toFixed(1) + 's';
+    }
+    if (Array.isArray(savedState.posLabels)) { posLabels = savedState.posLabels.slice(); renderContrastChips(posChips, posLabels, 'pos'); }
+    if (Array.isArray(savedState.negLabels)) { negLabels = savedState.negLabels.slice(); renderContrastChips(negChips, negLabels, 'neg'); }
+    updateContrastCounters();
+    if (savedState.contrastThresholdDirty) {
+      contrastThresholdDirty = true;
+      contrastThresholdSlider.value = savedState.contrastThreshold;
+      contrastThresholdValue.textContent = parseFloat(savedState.contrastThreshold).toFixed(2);
+      contrastThresholdDefaultTag.style.display = 'none';
+    }
+    if (typeof savedState.contrastReduce === 'string') contrastReduceSelect.value = savedState.contrastReduce;
+  }
+  restoreState();
+
+  // Persist native input/select changes; chips, CSV and contrast chips save explicitly.
+  document.querySelector('.container').addEventListener('input', saveState);
+  document.querySelector('.container').addEventListener('change', saveState);
+
+  // Reset All — clears only this page's saved state, then reloads to defaults.
+  document.getElementById('reset-all-btn').addEventListener('click', function () {
+    if (confirm("Reset this page's saved settings to defaults?")) {
+      try { localStorage.removeItem(SKEY); } catch (e) {}
+      location.reload();
+    }
+  });
 })();
 </script>
 </body>
