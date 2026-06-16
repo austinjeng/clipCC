@@ -415,6 +415,7 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
         prompt_for_model: str,
         max_new_tokens: int,
         parse_fn,  # (text) -> parsed | raises ValueError; None = return raw text
+        max_frames: int | None = None,
     ):
         """Shared label_scores/qa pipeline. Returns (payload, window, n_frames,
         video_info, latency, parse_retries)."""
@@ -434,7 +435,14 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
             span_start, span_end = resolve_window(
                 video_info.duration, window_start, settings.gemma_analysis_window_seconds
             )
-            timestamps = plan_timestamps(span_start, span_end, settings.effective_gemma_max_frames)
+            # Per-request frame count, clamped to [1, cap] — client value is a
+            # request, never trusted; falls back to the configured default.
+            n_frames_req = (
+                settings.effective_gemma_max_frames
+                if max_frames is None
+                else max(1, min(max_frames, settings.gemma_max_frames_cap))
+            )
+            timestamps = plan_timestamps(span_start, span_end, n_frames_req)
 
             async with gates.vlm_admission():
                 runner = InferenceRunner(timeout_seconds=settings.request_timeout_seconds)
@@ -479,7 +487,7 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
                         parse_seconds=0.0,  # parse happens inside the generate loop; negligible
                     )
                     n_retries = used_attempts - 1 if parse_fn is not None else 0
-                    return (parsed if parse_fn is not None else text), len(frames), latency, n_retries
+                    return (parsed if parse_fn is not None else text), text, len(frames), latency, n_retries
 
                 result = await runner.run(pipeline)
 
@@ -492,8 +500,8 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
                     )
                     raise InferenceTimeoutError(settings.request_timeout_seconds)
 
-            payload, n_frames, latency, parse_retries = result
-            return payload, (span_start, span_end), n_frames, video_info, latency, parse_retries
+            payload, raw_text, n_frames, latency, parse_retries = result
+            return payload, raw_text, (span_start, span_end), n_frames, video_info, latency, parse_retries
         finally:
             temp_store.cleanup(request_id)
 
@@ -515,6 +523,7 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
         labels: str = Form(),
         window_start: float = Form(default=0.0, ge=0.0),
         instruction: str = Form(default=""),
+        max_frames: int | None = Form(default=None),
     ):
         _check_gemma_upload(video)
         parsed_labels = _parse_label_array(labels, "labels")
@@ -527,12 +536,14 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
         )
         budget = label_scores_token_budget(len(parsed_labels))
 
-        payload, window, n_frames, video_info, latency, retries = await _run_gemma_pipeline(
+        payload, raw_text, window, n_frames, video_info, latency, retries = await _run_gemma_pipeline(
             video, window_start, prompt, budget,
             parse_fn=lambda text: parse_label_scores(text, parsed_labels),
+            max_frames=max_frames,
         )
         return GemmaLabelScoresResponse(
             scores=payload,
+            raw_output=raw_text,
             metadata=_gemma_metadata(window, n_frames, video_info, latency, retries),
         )
 
@@ -541,6 +552,7 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
         video: UploadFile,
         prompt: str = Form(),
         window_start: float = Form(default=0.0, ge=0.0),
+        max_frames: int | None = Form(default=None),
     ):
         _check_gemma_upload(video)
         if not prompt.strip():
@@ -548,9 +560,10 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
         if len(prompt) > 2000:
             raise InvalidGemmaParamsError("prompt must be 2000 characters or fewer.")
 
-        payload, window, n_frames, video_info, latency, retries = await _run_gemma_pipeline(
+        payload, _raw, window, n_frames, video_info, latency, retries = await _run_gemma_pipeline(
             video, window_start, build_qa_prompt(prompt),
             settings.gemma_max_new_tokens_qa, parse_fn=None,
+            max_frames=max_frames,
         )
         return GemmaQAResponse(
             answer=payload,

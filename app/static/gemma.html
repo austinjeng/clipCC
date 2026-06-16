@@ -19,6 +19,7 @@
   .status-loaded { background: #d4edda; } .status-failed { background: #f8d7da; }
   label { display: block; margin: 10px 0 4px; font-weight: 600; font-size: 14px; }
   input[type=text], textarea, select { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+  input[type=range] { width: 100%; accent-color: #7b1fa2; }
   button { background: #1a73e8; color: #fff; border: none; border-radius: 4px; padding: 10px 18px; font-size: 14px; cursor: pointer; margin-top: 12px; }
   button:disabled { background: #aaa; cursor: not-allowed; }
   .bar-row { display: flex; align-items: center; margin: 6px 0; gap: 8px; }
@@ -113,6 +114,8 @@
     <input type="file" id="videoInput" accept=".mp4,.avi,.mov,.mkv">
     <label for="windowStart">Analysis window start (seconds)</label>
     <input type="text" id="windowStart" value="0">
+    <label for="frameCount">Frames analyzed: <span id="frameCountVal">8</span> <span class="hint">(1–16; needs a window ≥ frames × 0.5&nbsp;s)</span></label>
+    <input type="range" id="frameCount" min="1" max="16" step="1" value="8">
     <label for="modeSelect">Mode</label>
     <select id="modeSelect">
       <option value="label_scores">Label scores</option>
@@ -154,6 +157,10 @@
     <div id="qaAnswer"></div>
     <div id="disclaimer" class="disclaimer" style="display:none;"></div>
     <div id="metaView" class="meta"></div>
+    <details id="rawOutput" style="display:none; margin-top:12px;">
+      <summary>Raw model output</summary>
+      <pre id="rawOutputText" class="preview"></pre>
+    </details>
     <div id="errView" class="error"></div>
   </div>
 </div>
@@ -250,6 +257,7 @@ function saveState() {
   try {
     localStorage.setItem(GKEY, JSON.stringify({
       windowStart: $('windowStart').value,
+      frameCount: $('frameCount').value,
       mode: $('modeSelect').value,
       labelsInput: $('labelsInput').value,
       instruction: $('instructionInput').value,
@@ -264,6 +272,7 @@ function saveState() {
 // chips exist (after the defaults fetch below).
 if (savedState) {
   if (typeof savedState.windowStart === 'string') $('windowStart').value = savedState.windowStart;
+  if (typeof savedState.frameCount === 'string') $('frameCount').value = savedState.frameCount;
   if (typeof savedState.labelsInput === 'string') $('labelsInput').value = savedState.labelsInput;
   if (typeof savedState.prompt === 'string') $('promptInput').value = savedState.prompt;
   if (typeof savedState.instruction === 'string') {
@@ -278,6 +287,10 @@ if (savedState) {
     $('promptField').style.display = qa ? '' : 'none';
   }
 }
+
+// Frame-count slider: live label update + initial sync after any restore above.
+$('frameCount').addEventListener('input', () => { $('frameCountVal').textContent = $('frameCount').value; });
+$('frameCountVal').textContent = $('frameCount').value;
 
 function applySavedChipSelection() {
   if (!savedState || !Array.isArray(savedState.disabled)) return;
@@ -403,6 +416,7 @@ $('runBtn').addEventListener('click', async () => {
   const fd = new FormData();
   fd.append('video', file);
   fd.append('window_start', $('windowStart').value || '0');
+  fd.append('max_frames', $('frameCount').value);
   if (mode === 'label_scores') {
     fd.append('labels', JSON.stringify(currentLabels()));
     fd.append('instruction', $('instructionInput').value);
@@ -412,6 +426,7 @@ $('runBtn').addEventListener('click', async () => {
   $('scoresView').replaceChildren(); $('qaAnswer').textContent = '';
   $('metaView').textContent = ''; $('errView').textContent = '';
   $('disclaimer').style.display = 'none';
+  $('rawOutput').style.display = 'none'; $('rawOutputText').textContent = '';
   $('analyzing').style.display = '';
   $('runBtn').disabled = true;
   $('runBtn').innerHTML = '<span class="spinner"></span>Analyzing…';
@@ -430,6 +445,9 @@ $('runBtn').addEventListener('click', async () => {
     } else {
       $('qaAnswer').textContent = body.answer;          // textContent: XSS rule (spec §9)
     }
+    // raw model text: label_scores returns it pre-parse; qa's answer IS the raw text
+    const raw = mode === 'label_scores' ? body.raw_output : body.answer;
+    if (raw) { $('rawOutputText').textContent = raw; $('rawOutput').style.display = ''; }  // textContent: untrusted
     const md = body.metadata;
     const wall = ((performance.now() - t0) / 1000).toFixed(1);
     $('metaView').textContent =

@@ -39,6 +39,7 @@ class GemmaMetadata(BaseModel):
 
 class GemmaLabelScoresResponse(BaseModel):
     scores: list[GemmaScoreItem]
+    raw_output: str  # verbatim model text before parsing (shown under a details toggle)
     metadata: GemmaMetadata
 
 

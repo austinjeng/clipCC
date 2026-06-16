@@ -171,12 +171,49 @@ async def test_label_scores_happy_path_with_stubbed_video(app_and_slot, monkeypa
         body = r.json()
         assert body["scores"][0] == {"label": "texting", "score": 0.8, "evidence": "phone"}
         assert body["scores"][1]["score"] == 0.1
+        assert body["raw_output"] == '[{"id": 1, "score": 0.8, "evidence": "phone"}, {"id": 2, "score": 0.1}]'
         md = body["metadata"]
         assert md["score_semantics"] == "gemma4_verbalized_uncalibrated"
         assert md["window_start_seconds"] == 0.0
         assert md["window_end_seconds"] == 30.0
         assert md["frames_analyzed"] == 8
         assert set(md["latency"]) == {"extract_seconds", "generate_seconds", "parse_seconds"}
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("requested,expected", [(12, 12), (99, 16), (0, 1)])
+async def test_label_scores_max_frames_clamped(app_and_slot, monkeypatch, tmp_path, requested, expected):
+    """Per-request max_frames is honored and clamped to [1, cap]. 30s window
+    keeps the 0.5s spacing floor (60) out of the way, so frames_analyzed
+    reflects the clamp only."""
+    app, slot = app_and_slot
+    fake = FakeGemma(label_scores_reply='[{"id": 1, "score": 0.5}]')
+    await force_loaded(slot, fake)
+
+    import app.main as main_mod
+    from app.services.video import VideoInfo
+    from app.services.gemma_sampler import GemmaFrame
+    from PIL import Image
+
+    monkeypatch.setattr(main_mod, "probe_video",
+                        lambda path, timeout=30: VideoInfo(duration=30.0, width=640, height=480,
+                                                           video_stream_count=1, format_name="mp4"))
+
+    def fake_extract(video_path, timestamps, frame_dir, cancel_event, ffmpeg_timeout=120, runner=None):
+        frames = []
+        for i, ts in enumerate(timestamps):
+            p = tmp_path / f"f{i}.jpg"
+            Image.new("RGB", (8, 8)).save(p)
+            frames.append(GemmaFrame(path=p, timestamp_seconds=ts))
+        return frames
+
+    monkeypatch.setattr(main_mod, "gemma_extract_frames", fake_extract)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/v1/gemma/label_scores", files=tiny_upload(),
+                         data={"labels": '["texting"]', "max_frames": str(requested)})
+        assert r.status_code == 200, r.text
+        assert r.json()["metadata"]["frames_analyzed"] == expected
 
 
 @pytest.mark.anyio
