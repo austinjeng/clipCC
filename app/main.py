@@ -53,6 +53,7 @@ from app.schemas.gemma import (
     GemmaStatusResponse,
 )
 from app.services.gemma_prompts import (
+    DEFAULT_LABEL_SCORES_INSTRUCTION,
     build_label_scores_prompt,
     build_qa_prompt,
     label_scores_token_budget,
@@ -381,6 +382,7 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
             error=vlm_slot.error,
             model_id=settings.gemma_model_id,
             device=vlm_slot.device,
+            default_label_instruction=DEFAULT_LABEL_SCORES_INSTRUCTION,
         )
 
     @app.post("/api/v1/gemma/warm", status_code=202)
@@ -510,12 +512,17 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
         video: UploadFile,
         labels: str = Form(),
         window_start: float = Form(default=0.0, ge=0.0),
+        instruction: str = Form(default=""),
     ):
         _check_gemma_upload(video)
         parsed_labels = _parse_label_array(labels, "labels")
         _validate_label_group(parsed_labels, "labels", max_count=settings.gemma_max_labels)
+        if len(instruction) > 2000:
+            raise InvalidGemmaParamsError("instruction must be 2000 characters or fewer.")
 
-        prompt = build_label_scores_prompt(parsed_labels, settings.gemma_evidence_top_k)
+        prompt = build_label_scores_prompt(
+            parsed_labels, settings.gemma_evidence_top_k, instruction=instruction or None
+        )
         budget = label_scores_token_budget(len(parsed_labels))
 
         payload, window, n_frames, video_info, latency, retries = await _run_gemma_pipeline(

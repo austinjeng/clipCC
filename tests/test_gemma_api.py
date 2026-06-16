@@ -244,3 +244,50 @@ async def test_gemma_page_served(app_and_slot):
         r = await c.get("/gemma")
         assert r.status_code == 200
         assert "Gemma" in r.text
+
+
+@pytest.mark.anyio
+async def test_status_exposes_default_label_instruction(app_and_slot):
+    app, slot = app_and_slot
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.get("/api/v1/gemma/status")
+        assert "You are analyzing frames" in r.json()["default_label_instruction"]
+
+
+@pytest.mark.anyio
+async def test_label_scores_instruction_length_capped(app_and_slot):
+    app, slot = app_and_slot
+    await force_loaded(slot)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/v1/gemma/label_scores", files=tiny_upload(),
+                         data={"labels": '["texting"]', "instruction": "x" * 2001})
+        assert r.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_label_scores_custom_instruction_reaches_model(app_and_slot, monkeypatch, tmp_path):
+    app, slot = app_and_slot
+    fake = FakeGemma(label_scores_reply='[{"id": 1, "score": 0.5}]')
+    await force_loaded(slot, fake)
+
+    import app.main as main_mod
+    from app.services.video import VideoInfo
+    from app.services.gemma_sampler import GemmaFrame
+    from PIL import Image
+
+    monkeypatch.setattr(main_mod, "probe_video",
+                        lambda path, timeout=30: VideoInfo(duration=10.0, width=640, height=480,
+                                                           video_stream_count=1, format_name="mp4"))
+
+    def fake_extract(video_path, timestamps, frame_dir, cancel_event, ffmpeg_timeout=120, runner=None):
+        p = tmp_path / "f.jpg"
+        Image.new("RGB", (8, 8)).save(p)
+        return [GemmaFrame(path=p, timestamp_seconds=t) for t in timestamps]
+
+    monkeypatch.setattr(main_mod, "gemma_extract_frames", fake_extract)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        r = await c.post("/api/v1/gemma/label_scores", files=tiny_upload(),
+                         data={"labels": '["texting"]', "instruction": "Custom: rate harshly."})
+        assert r.status_code == 200, r.text
+    assert any("Custom: rate harshly." in p for p in fake.calls)

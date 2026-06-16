@@ -70,6 +70,12 @@
         <button type="button" id="csvClearBtn" class="csv-btn danger" style="display:none">Clear CSV</button>
         <span class="hint" id="csvHint"></span>
       </div>
+      <label for="instructionInput">Prompt instruction <span class="hint">(JSON output format is fixed)</span></label>
+      <textarea id="instructionInput" rows="3"></textarea>
+      <div class="csv-row">
+        <button type="button" id="resetInstructionBtn" class="csv-btn">Reset to default</button>
+        <span class="hint">Edit how Gemma is told to judge the behaviors. The numbered labels and the strict JSON contract are appended automatically.</span>
+      </div>
     </div>
     <div id="promptField" style="display:none;">
       <label for="promptInput">Question</label>
@@ -91,12 +97,22 @@
 <script>
 const $ = (id) => document.getElementById(id);
 let pollTimer = null;
+let defaultInstruction = '';
+let instructionInitialized = false;
 
 async function fetchStatus() {
   try {
     const r = await fetch('/api/v1/gemma/status');
     const s = await r.json();
     $('modelId').textContent = s.model_id;
+    if (typeof s.default_label_instruction === 'string') {
+      defaultInstruction = s.default_label_instruction;
+      // prefill once; never clobber a user's edits on later status polls
+      if (!instructionInitialized && !$('instructionInput').value) {
+        $('instructionInput').value = defaultInstruction;
+        instructionInitialized = true;
+      }
+    }
     const pill = $('statusPill');
     pill.textContent = s.state;
     pill.className = 'status-pill status-' + s.state;
@@ -120,6 +136,10 @@ $('modeSelect').addEventListener('change', () => {
   const qa = $('modeSelect').value === 'qa';
   $('labelsField').style.display = qa ? 'none' : '';
   $('promptField').style.display = qa ? '' : 'none';
+});
+
+$('resetInstructionBtn').addEventListener('click', () => {
+  $('instructionInput').value = defaultInstruction;
 });
 
 // CSV label import — same parsing as the SigLIP2 page: one label per line,
@@ -200,8 +220,10 @@ $('runBtn').addEventListener('click', async () => {
   const fd = new FormData();
   fd.append('video', file);
   fd.append('window_start', $('windowStart').value || '0');
-  if (mode === 'label_scores') fd.append('labels', $('labelsInput').value);
-  else fd.append('prompt', $('promptInput').value);
+  if (mode === 'label_scores') {
+    fd.append('labels', $('labelsInput').value);
+    fd.append('instruction', $('instructionInput').value);
+  } else fd.append('prompt', $('promptInput').value);
 
   $('resultsCard').style.display = '';
   $('scoresView').replaceChildren(); $('qaAnswer').textContent = '';

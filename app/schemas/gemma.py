@@ -53,3 +53,4 @@ class GemmaStatusResponse(BaseModel):
     error: str | None = None
     model_id: str
     device: str
+    default_label_instruction: str = ""  # default editable prompt for label-scores mode

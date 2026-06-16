@@ -19,11 +19,24 @@ def label_scores_token_budget(n_labels: int) -> int:
     return min(_BUDGET_BASE + _BUDGET_PER_LABEL * n_labels, _BUDGET_MAX)
 
 
-def build_label_scores_prompt(labels: list[str], evidence_top_k: int) -> str:
+# The default leading instruction. Users may override it (label-scores mode),
+# but the behaviors block and JSON contract below are always appended.
+DEFAULT_LABEL_SCORES_INSTRUCTION = (
+    "You are analyzing frames sampled from a video, in chronological order.\n"
+    "Score how strongly each numbered behavior below is visible anywhere in these frames."
+)
+
+
+def build_label_scores_prompt(
+    labels: list[str], evidence_top_k: int, instruction: str | None = None
+) -> str:
+    # Blank/None instruction falls back to the default, so the default prompt is
+    # byte-identical to before. Only the leading instruction is user-editable;
+    # the behaviors block and the strict JSON contract are always appended.
+    instr = (instruction or "").strip() or DEFAULT_LABEL_SCORES_INSTRUCTION
     numbered = "\n".join(f"{i + 1}: {label}" for i, label in enumerate(labels))
     return (
-        "You are analyzing frames sampled from a video, in chronological order.\n"
-        "Score how strongly each numbered behavior below is visible anywhere in these frames.\n\n"
+        f"{instr}\n\n"
         f"Behaviors:\n{numbered}\n\n"
         "Respond with ONLY a JSON array, no other text. One object per behavior id:\n"
         '[{"id": <behavior number>, "score": <number from 0.0 to 1.0>}]\n'

@@ -112,3 +112,30 @@ def test_parse_non_list_rejected():
 def test_qa_prompt_embeds_user_text():
     p = build_qa_prompt("what is the driver doing?")
     assert "what is the driver doing?" in p
+
+
+def test_default_instruction_used_when_omitted():
+    from app.services.gemma_prompts import DEFAULT_LABEL_SCORES_INSTRUCTION
+
+    p = build_label_scores_prompt(LABELS, evidence_top_k=3)
+    assert DEFAULT_LABEL_SCORES_INSTRUCTION in p
+    # explicit None must match the omitted default exactly (backward compatible)
+    assert build_label_scores_prompt(LABELS, evidence_top_k=3, instruction=None) == p
+
+
+def test_custom_instruction_replaces_preamble_but_keeps_contract():
+    from app.services.gemma_prompts import DEFAULT_LABEL_SCORES_INSTRUCTION
+
+    custom = "Be a harsh, skeptical judge of each behavior."
+    p = build_label_scores_prompt(LABELS, evidence_top_k=3, instruction=custom)
+    assert custom in p
+    assert DEFAULT_LABEL_SCORES_INSTRUCTION not in p
+    # behaviors block + JSON contract are appended regardless of the instruction
+    assert "1: texting while driving" in p
+    assert '"id"' in p and "Include every id exactly once." in p
+
+
+def test_blank_instruction_falls_back_to_default():
+    p_blank = build_label_scores_prompt(LABELS, evidence_top_k=3, instruction="   ")
+    p_default = build_label_scores_prompt(LABELS, evidence_top_k=3)
+    assert p_blank == p_default
