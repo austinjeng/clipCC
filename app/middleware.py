@@ -118,9 +118,11 @@ class RequestGateMiddleware:
             return
 
         # /api/v1/classify + Gemma upload routes: auth → [slot-state gate] → upload concurrency → body size
-        is_gemma_upload = path in GEMMA_UPLOAD_PATHS
+        # /api/v1/hybrid runs SigLIP2 then Gemma — gate it like a VLM upload route
+        # (it needs Gemma loaded before we drain a 500MB body).
+        is_vlm_upload = path in GEMMA_UPLOAD_PATHS or path == "/api/v1/hybrid"
 
-        if path == "/api/v1/classify" or is_gemma_upload:
+        if path == "/api/v1/classify" or is_vlm_upload:
             if not self._check_auth(scope):
                 await _send_json_response(
                     send,
@@ -129,7 +131,7 @@ class RequestGateMiddleware:
                 )
                 return
 
-            if is_gemma_upload:
+            if is_vlm_upload:
                 state = self._vlm_state() if self._vlm_state is not None else "idle"
                 if state != "loaded":
                     # Fail fast BEFORE draining the multipart body: a cold
