@@ -71,6 +71,7 @@ async def test_hybrid_end_to_end_real_models(synthetic_video):
         # gemma_calls equals the number of evaluated labels.
         evaluated = [x for x in body["results"] if x["gemma_evaluated"]]
         assert body["metadata"]["gemma_calls"] == len(evaluated)
+        assert len(evaluated) >= 1, f"expected >=1 evaluated label with threshold=0.0, got 0; results={body['results']}"
         for x in evaluated:
             assert x["verdict"] in ("present", "not_present", "uncertain")
             assert x["frames_shown"]  # real frames were re-extracted
