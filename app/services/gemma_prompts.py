@@ -109,3 +109,45 @@ def parse_label_scores(text: str, labels: list[str]) -> list[GemmaScoreItem]:
         )
         for i, label in enumerate(labels)
     ]
+
+
+VERDICT_LITERALS = ("present", "not_present", "uncertain")
+
+DEFAULT_VERDICT_INSTRUCTION = (
+    "You are analyzing frames sampled from a video, in chronological order.\n"
+    "Decide whether the following behavior is visibly happening in these frames."
+)
+
+
+def build_verdict_prompt(label: str, instruction: str | None = None) -> str:
+    instr = (instruction or "").strip() or DEFAULT_VERDICT_INSTRUCTION
+    return (
+        f"{instr}\n\n"
+        f"Behavior: {label}\n\n"
+        "Respond with ONLY a JSON object, no other text:\n"
+        '{"verdict": "present" | "not_present" | "uncertain", "explanation": "<one short sentence>"}\n'
+        'Use "present" only if you clearly see it, "not_present" if you clearly do not, '
+        '"uncertain" if the frames are ambiguous. The explanation must be one short sentence.'
+    )
+
+
+def parse_verdict(text: str) -> dict:
+    """Strict parse: tolerate prose/fences, require a JSON object with a valid
+    verdict literal and a non-empty explanation string. Raises ValueError otherwise."""
+    cleaned = _FENCE_RE.sub("", text.strip()).strip()
+    start, end = cleaned.find("{"), cleaned.rfind("}")
+    if start != -1 and end > start:
+        cleaned = cleaned[start:end + 1]
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"not valid JSON: {e}") from e
+    if not isinstance(data, dict):
+        raise ValueError("expected a JSON object")
+    verdict = data.get("verdict")
+    if verdict not in VERDICT_LITERALS:
+        raise ValueError(f"verdict must be one of {VERDICT_LITERALS}, got {verdict!r}")
+    explanation = data.get("explanation")
+    if not isinstance(explanation, str) or not explanation.strip():
+        raise ValueError("explanation must be a non-empty string")
+    return {"verdict": verdict, "explanation": explanation.strip()}
