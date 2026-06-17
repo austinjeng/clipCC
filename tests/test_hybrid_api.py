@@ -150,3 +150,12 @@ async def test_hybrid_503_when_no_siglip2_model(temp_dir, small_video):
                 r = await c.post("/api/v1/hybrid", files=_upload(small_video),
                                  data={"labels": '["x"]', "threshold": "0.0"})
                 assert r.status_code == 503
+
+
+@pytest.mark.anyio
+async def test_hybrid_page_served(hybrid_app):
+    c, app = hybrid_app
+    r = await c.get("/hybrid")
+    assert r.status_code == 200
+    assert "Hybrid" in r.text
+    assert "/api/v1/hybrid" in r.text  # the page posts to the endpoint
