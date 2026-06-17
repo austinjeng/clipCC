@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     gemma_max_new_tokens_qa: int = 400
     gemma_image_token_budget: int = 280
     gemma_evidence_top_k: int = 3
+    gemma_max_new_tokens_verdict: int = 160
+    hybrid_max_verified_labels: int = 6
+    hybrid_thumbnail_px: int = 160
     # 11.4 GB bf16 weights + KV/activations margin; reserved in the residency ledger
     gemma_reserve_gb: float = 12.0
     residency_headroom_gb: float = 2.0
