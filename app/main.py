@@ -52,6 +52,13 @@ from app.schemas.gemma import (
     GemmaQAResponse,
     GemmaStatusResponse,
 )
+from app.schemas.hybrid import (
+    HybridFrameRef,
+    HybridLabelResult,
+    HybridLatency,
+    HybridMetadata,
+    HybridResponse,
+)
 from app.services.gemma_prompts import (
     DEFAULT_LABEL_SCORES_INSTRUCTION,
     build_label_scores_prompt,
@@ -60,6 +67,7 @@ from app.services.gemma_prompts import (
     label_scores_token_budget,
     parse_label_scores,
 )
+from app.services.gemma_prompts import build_verdict_prompt, parse_verdict
 from app.services.gemma_sampler import (
     extract_frames as gemma_extract_frames,
     plan_timestamps,
@@ -79,6 +87,13 @@ from app.schemas.response import (
 )
 from app.services.frame_timeline import FrameTimeline
 from app.services.scoring import aggregate_frame_scores, VALID_CONTRAST_REDUCTIONS
+from app.services.scoring import ScoringContext
+from app.services.hybrid_select import (
+    gate_and_rank_labels,
+    per_label_scores,
+    select_topk_spread,
+    thumbnail_data_uri,
+)
 from app.services.temporal_policy import get_policy
 from app.services.video import FrameExtractor, probe_video, validate_video_constraints
 from app.temp_store import TempStore
@@ -375,6 +390,10 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
     async def serve_gemma_ui():
         return FileResponse(STATIC_DIR / "gemma.html")
 
+    @app.get("/hybrid")
+    async def serve_hybrid_ui():
+        return FileResponse(STATIC_DIR / "hybrid.html")
+
     @app.get("/api/v1/gemma/status", response_model=GemmaStatusResponse)
     async def gemma_status():
         return GemmaStatusResponse(
@@ -569,6 +588,210 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
             answer=payload,
             metadata=_gemma_metadata(window, n_frames, video_info, latency, retries),
         )
+
+    @app.post("/api/v1/hybrid", response_model=HybridResponse)
+    async def hybrid(
+        video: UploadFile,
+        labels: str = Form(),
+        fps: float = Form(default=1.0),
+        aggregation: str = Form(default="max"),
+        threshold: float = Form(default=0.5, ge=0.0, le=1.0),
+        top_k: int = Form(default=3),
+        max_verified_labels: int | None = Form(default=None),
+        instruction: str = Form(default=""),
+    ):
+        manager: Optional[ModelManager] = state.get("manager")
+        temp_store: TempStore = state["temp_store"]
+        gates: ResourceGates = state["gates"]
+
+        # --- validation (before any work) ---
+        ext = Path(video.filename or "").suffix.lower()
+        if ext not in SUPPORTED_EXTENSIONS:
+            raise UnsupportedFormatError(ext if ext else (video.filename or ""))
+        if vlm_slot.state != VlmState.LOADED:
+            raise HTTPException(
+                status_code=503,
+                detail="Gemma model is not loaded. Trigger loading via POST /api/v1/gemma/warm.",
+            )
+        if fps < 0.1 or fps > 5.0:
+            raise InvalidFpsError(fps)
+        if aggregation not in ("max", "mean"):
+            raise InvalidAggregationError(aggregation)
+        if top_k < 1 or top_k > settings.gemma_max_frames_cap:
+            raise InvalidGemmaParamsError(
+                f"top_k must be between 1 and {settings.gemma_max_frames_cap}."
+            )
+        cap = settings.hybrid_max_verified_labels if max_verified_labels is None else max_verified_labels
+        if cap < 1:
+            raise InvalidGemmaParamsError("max_verified_labels must be >= 1.")
+        parsed_labels = _parse_label_array(labels, "labels")
+        _validate_label_group(parsed_labels, "labels", max_count=settings.gemma_max_labels)
+        if len(instruction) > 2000:
+            raise InvalidGemmaParamsError("instruction must be 2000 characters or fewer.")
+
+        prompts = [f"This is a photo of {lb}." for lb in parsed_labels]
+        request_id = str(uuid.uuid4())
+        deadline = time.monotonic() + settings.request_timeout_seconds
+        t_start = time.monotonic()
+
+        def _remaining() -> int:
+            return max(1, int(deadline - time.monotonic()))
+
+        try:
+            async with manager.acquire(timeout=settings.request_timeout_seconds) as lease:
+                model = lease.model
+                siglip2_model_id = manager.active_model_id or ""
+                device = model.device
+
+                token_counts = model.validate_prompts(prompts)
+                for p, count in zip(prompts, token_counts):
+                    if count > model.max_token_length:
+                        raise TokenTruncationError(p, count)
+
+                stored = await anyio.to_thread.run_sync(
+                    temp_store.save_upload, request_id, video.file
+                )
+                video_info = await anyio.to_thread.run_sync(
+                    partial(probe_video, stored.path, timeout=settings.ffmpeg_timeout_seconds)
+                )
+                validate_video_constraints(video_info, settings, fps)
+
+                # --- Phase 1: SigLIP2 scores every frame (frames deleted as scored) ---
+                async with gates.inference_admission():
+                    runner_s = InferenceRunner(timeout_seconds=_remaining())
+
+                    def score_pipeline(cancel_event, runner_ref):
+                        frame_dir = temp_store.create_frame_dir(request_id)
+                        extractor = FrameExtractor(ffmpeg_timeout=settings.ffmpeg_timeout_seconds)
+                        frame_samples = extractor.extract(
+                            video_path=stored.path, fps=fps, max_frames=settings.max_frames,
+                            frame_dir=frame_dir, cancel_event=cancel_event, runner=runner_ref,
+                        )
+                        all_batches = []
+                        all_frames = []
+                        for bs in range(0, len(frame_samples), settings.batch_size):
+                            if cancel_event.is_set():
+                                break
+                            batch = frame_samples[bs: bs + settings.batch_size]
+                            images = [Image.open(fs.path).convert("RGB") for fs in batch]
+                            all_batches.append(model.score_batch(images, prompts))
+                            all_frames.extend(batch)
+                            for fs in batch:
+                                try:
+                                    fs.path.unlink(missing_ok=True)
+                                except Exception:
+                                    pass
+                        return all_batches, all_frames
+
+                    score_result = await runner_s.run(score_pipeline)
+                    if score_result is None:
+                        raise InferenceTimeoutError(settings.request_timeout_seconds)
+                    all_batches, all_frames = score_result
+                    if not all_frames:
+                        raise NoFramesExtractedError()
+                siglip2_seconds = round(time.monotonic() - t_start, 3)
+
+            # SigLIP2 lease released. Build context + selection (cheap, main thread).
+            ctx = ScoringContext.from_batches(all_batches, parsed_labels, all_frames)
+            scores = per_label_scores(ctx, aggregation)
+            selected, n_above, n_trunc = gate_and_rank_labels(ctx, scores, threshold, cap)
+            label_refs: dict[str, list] = {}
+            for g in selected:
+                refs = select_topk_spread(ctx, g.label_idx, top_k)
+                refs.sort(key=lambda r: r.timestamp_seconds)  # chronological for Gemma
+                label_refs[g.label] = refs
+
+            # --- Phase 2: per-label Gemma verdicts (re-extract frames at 896px) ---
+            gemma_out: dict = {}
+            t_gemma = time.monotonic()
+            if selected:
+                async with gates.vlm_admission():
+                    runner_g = InferenceRunner(timeout_seconds=_remaining())
+                    gmodel = vlm_slot.model
+
+                    def verdict_pipeline(cancel_event, runner_ref):
+                        out: dict = {}
+                        frame_dir = temp_store.create_frame_dir(request_id)
+                        for g in selected:
+                            if cancel_event.is_set():
+                                break
+                            refs = label_refs[g.label]
+                            timestamps = [r.timestamp_seconds for r in refs]
+                            gframes = gemma_extract_frames(
+                                stored.path, timestamps, frame_dir, cancel_event,
+                                ffmpeg_timeout=settings.ffmpeg_timeout_seconds, runner=runner_ref,
+                            )
+                            images = [Image.open(f.path).convert("RGB") for f in gframes]
+                            shown = [
+                                HybridFrameRef(
+                                    frame_index=ref.frame_index,
+                                    timestamp_seconds=ref.timestamp_seconds,
+                                    score=ref.score,
+                                    thumbnail=thumbnail_data_uri(f.path, settings.hybrid_thumbnail_px),
+                                )
+                                for ref, f in zip(refs, gframes)
+                            ]
+                            prompt = build_verdict_prompt(g.label, instruction=instruction or None)
+                            verdict = explanation = None
+                            parse_failed = False
+                            for _ in range(2):
+                                if cancel_event.is_set():
+                                    break
+                                text = gmodel.generate(
+                                    images, prompt, settings.gemma_max_new_tokens_verdict, cancel_event
+                                )
+                                try:
+                                    parsed = parse_verdict(text)
+                                    verdict, explanation = parsed["verdict"], parsed["explanation"]
+                                    parse_failed = False
+                                    break
+                                except ValueError:
+                                    parse_failed = True
+                            if verdict is None:
+                                verdict, explanation, parse_failed = (
+                                    "uncertain", "(could not parse model output)", True
+                                )
+                            out[g.label] = (verdict, explanation, parse_failed, shown)
+                        return out
+
+                    gemma_out = await runner_g.run(verdict_pipeline)
+                    if gemma_out is None:
+                        raise InferenceTimeoutError(settings.request_timeout_seconds)
+            gemma_seconds = round(time.monotonic() - t_gemma, 3)
+
+            results = []
+            for i, label in enumerate(parsed_labels):
+                if label in gemma_out:
+                    verdict, explanation, parse_failed, shown = gemma_out[label]
+                    results.append(HybridLabelResult(
+                        label=label, siglip2_score=scores[i], gemma_evaluated=True,
+                        verdict=verdict, explanation=explanation, parse_failed=parse_failed,
+                        frames_shown=shown,
+                    ))
+                else:
+                    results.append(HybridLabelResult(
+                        label=label, siglip2_score=scores[i], gemma_evaluated=False,
+                    ))
+
+            return HybridResponse(
+                results=results,
+                metadata=HybridMetadata(
+                    siglip2_model=siglip2_model_id, gemma_model=settings.gemma_model_id,
+                    device=device, frames_analyzed=len(all_frames),
+                    video_duration_seconds=video_info.duration, aggregation=aggregation,
+                    threshold=threshold, top_k=top_k, max_verified_labels=cap,
+                    labels_above_threshold=n_above, labels_truncated=n_trunc,
+                    gemma_calls=len(gemma_out),
+                    latency=HybridLatency(siglip2_seconds=siglip2_seconds, gemma_seconds=gemma_seconds),
+                ),
+            )
+        except NoModelLoadedError:
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "No model loaded. Load a model first via POST /api/v1/models/load."},
+            )
+        finally:
+            temp_store.cleanup(request_id)
 
     @app.post("/api/v1/classify", response_model=ClassifyResponse)
     async def classify(
