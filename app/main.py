@@ -717,8 +717,11 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
                                 break
                             refs = label_refs[g.label]
                             timestamps = [r.timestamp_seconds for r in refs]
+                            # Per-label subdir prevents gemma_NNN.jpg filename collisions across labels.
+                            label_dir = frame_dir / f"label_{g.label_idx}"
+                            label_dir.mkdir(parents=True, exist_ok=True)
                             gframes = gemma_extract_frames(
-                                stored.path, timestamps, frame_dir, cancel_event,
+                                stored.path, timestamps, label_dir, cancel_event,
                                 ffmpeg_timeout=settings.ffmpeg_timeout_seconds, runner=runner_ref,
                             )
                             images = [Image.open(f.path).convert("RGB") for f in gframes]

@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-from app.schemas.gemma import GEMMA_DISCLAIMER, GEMMA_SCORE_SEMANTICS
+from app.schemas.gemma import GEMMA_SCORE_SEMANTICS
 
 SIGLIP2_SCORE_SEMANTICS = "siglip2_pairwise_sigmoid"
 
