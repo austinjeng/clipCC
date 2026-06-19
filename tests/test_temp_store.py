@@ -42,3 +42,34 @@ def test_janitor_removes_old_files(store):
     os.utime(old_dir, (one_hour_ago, one_hour_ago))
     store.run_janitor(max_age_seconds=3600)
     assert not old_dir.exists()
+
+
+def test_janitor_continues_past_vanished_dir(store, monkeypatch):
+    # A concurrent request deleting its own dir between iterdir() and stat()
+    # (TOCTOU) must not abort the sweep and strand later, genuinely-old orphans.
+    import os, time
+    keep = store.base_dir / "old-keep"
+    keep.mkdir(parents=True)
+    old = time.time() - 7200
+    os.utime(keep, (old, old))
+
+    class _VanishingChild:
+        # is_dir() saw the dir, but it was deleted before the explicit stat().
+        name = "req-vanish"
+
+        def is_dir(self):
+            return True
+
+        def stat(self, *args, **kwargs):
+            raise FileNotFoundError("dir deleted by a concurrent request")
+
+    # Deterministic order: the vanishing entry is visited before the real one.
+    monkeypatch.setattr(
+        type(store.base_dir), "iterdir",
+        lambda self: iter([_VanishingChild(), keep]),
+    )
+
+    store.run_janitor(max_age_seconds=3600)
+
+    # The genuinely-old 'keep' dir must still be swept despite the prior raise.
+    assert not keep.exists()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,8 @@ import torch
 
 from app.models.base_model import BaseModel
 from app.models.siglip2_model import SigLip2Model
+
+logger = logging.getLogger(__name__)
 
 
 class NoModelLoadedError(Exception):
@@ -117,12 +120,13 @@ SIGLIP2_REGISTRY: dict[str, ModelConfig] = {
 
 
 class ModelManager:
-    def __init__(self, cache_dir: str, offline: bool = False):
+    def __init__(self, cache_dir: str, offline: bool = False, ledger=None):
         self.registry = dict(SIGLIP2_REGISTRY)
         self.active_model: BaseModel | None = None
         self.active_model_id: str | None = None
         self.cache_dir = cache_dir
         self._offline = offline
+        self._ledger = ledger
         self._condition = asyncio.Condition()
         self._swapping = False
         self._active_leases = 0
@@ -200,6 +204,20 @@ class ModelManager:
             self._swapping = False
             self._condition.notify_all()
 
+        if self._ledger is not None:
+            # Bookkeeping, not admission control: the bytes are already resident.
+            # Always reconcile the 'siglip2' owner on every swap — otherwise a swap
+            # to a model without min_ram_gb would leave the prior reservation behind,
+            # and _check_resources would keep subtracting those phantom bytes.
+            try:
+                if config.min_ram_gb:
+                    # replace() is atomic — no release-then-reserve window.
+                    self._ledger.replace("siglip2", "cpu", int(config.min_ram_gb * 1e9))
+                else:
+                    self._ledger.release("siglip2")
+            except Exception as e:
+                logger.warning(f"Residency ledger update failed after model swap: {e}")
+
     def _preflight_check(self, config: ModelConfig) -> None:
         if self._offline and not self._is_cached(config):
             raise ModelNotCachedError(
@@ -227,6 +245,9 @@ class ModelManager:
             active_config = self.registry.get(self.active_model_id)
             if active_config and active_config.min_ram_gb:
                 estimated_available += active_config.min_ram_gb * 1e9
+
+        if self._ledger is not None:
+            estimated_available -= self._ledger.reserved_bytes("cpu")
 
         if required_bytes > estimated_available:
             raise InsufficientResourcesError(

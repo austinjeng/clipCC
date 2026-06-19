@@ -4,6 +4,8 @@
 #
 #    pip-compile --output-file=requirements-prod.txt requirements-prod.in
 #
+accelerate==1.14.0
+    # via -r requirements-prod.in
 annotated-doc==0.0.4
     # via
     #   fastapi
@@ -48,6 +50,7 @@ httpx==0.28.1
     # via huggingface-hub
 huggingface-hub==1.14.0
     # via
+    #   accelerate
     #   tokenizers
     #   transformers
 idna==3.15
@@ -67,15 +70,23 @@ mpmath==1.3.0
 networkx==3.6.1
     # via torch
 numpy==2.4.4
-    # via transformers
+    # via
+    #   accelerate
+    #   torchvision
+    #   transformers
 packaging==26.2
     # via
+    #   accelerate
     #   huggingface-hub
     #   transformers
 pillow==12.2.0
-    # via -r requirements-prod.in
+    # via
+    #   -r requirements-prod.in
+    #   torchvision
 psutil==7.2.2
-    # via -r requirements-prod.in
+    # via
+    #   -r requirements-prod.in
+    #   accelerate
 pydantic==2.13.4
     # via
     #   -r requirements-prod.in
@@ -95,6 +106,7 @@ python-multipart==0.0.28
     # via -r requirements-prod.in
 pyyaml==6.0.3
     # via
+    #   accelerate
     #   huggingface-hub
     #   transformers
     #   uvicorn
@@ -103,7 +115,9 @@ regex==2026.5.9
 rich==15.0.0
     # via typer
 safetensors==0.7.0
-    # via transformers
+    # via
+    #   accelerate
+    #   transformers
 sentencepiece==0.2.1
     # via -r requirements-prod.in
 shellingham==1.5.4
@@ -115,6 +129,11 @@ sympy==1.14.0
 tokenizers==0.22.2
     # via transformers
 torch==2.12.0
+    # via
+    #   -r requirements-prod.in
+    #   accelerate
+    #   torchvision
+torchvision==0.27.0
     # via -r requirements-prod.in
 tqdm==4.67.3
     # via

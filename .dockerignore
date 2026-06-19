@@ -3,6 +3,8 @@ __pycache__
 .pytest_cache
 .playwright-mcp
 .planning/
+.knowledge/
+.DS_Store
 tests/
 docs/
 *.pyc

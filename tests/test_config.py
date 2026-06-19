@@ -52,6 +52,21 @@ def test_validate_auth_config_passes_with_flag() -> None:
     s.validate_auth_config()  # should not raise
 
 
+def test_blank_api_key_normalized_to_none() -> None:
+    # Empty / whitespace-only keys must be treated as unconfigured so they can
+    # never authenticate an empty X-API-Key header.
+    assert Settings(api_key="", allow_unauthenticated=True).api_key is None
+    assert Settings(api_key="   ", allow_unauthenticated=True).api_key is None
+
+
+def test_validate_auth_config_fails_with_blank_key() -> None:
+    # A blank key with auth required must fail closed (server must not start).
+    with pytest.raises(RuntimeError):
+        Settings(api_key="", allow_unauthenticated=False).validate_auth_config()
+    with pytest.raises(RuntimeError):
+        Settings(api_key="   ", allow_unauthenticated=False).validate_auth_config()
+
+
 def test_default_model_id_default():
     s = Settings(allow_unauthenticated=True)
     assert s.default_model_id == "siglip2-base-patch16-256"
@@ -74,6 +89,21 @@ def test_skip_model_autoload_from_env(monkeypatch):
     assert s.skip_model_autoload is True
 
 
+def test_default_labels_default():
+    s = Settings(allow_unauthenticated=True)
+    assert s.default_labels == [
+        "texting while driving",
+        "sleeping while driving",
+        "eating while driving",
+    ]
+
+
+def test_default_labels_from_env(monkeypatch):
+    monkeypatch.setenv("DEFAULT_LABELS", '["label1", "label2"]')
+    s = Settings(allow_unauthenticated=True)
+    assert s.default_labels == ["label1", "label2"]
+
+
 class TestOfflineSetting:
     def test_offline_defaults_false(self):
         s = Settings(allow_unauthenticated=True)
@@ -83,3 +113,36 @@ class TestOfflineSetting:
         monkeypatch.setenv("CLIPCC_OFFLINE", "1")
         s = Settings(allow_unauthenticated=True)
         assert s.clipcc_offline is True
+
+
+def test_gemma_defaults():
+    s = Settings(allow_unauthenticated=True)
+    assert s.gemma_model_id == "google/gemma-4-E2B-it"
+    assert s.gemma_enabled is True
+    assert s.gemma_max_frames == 8
+    assert s.gemma_max_frames_cap == 16
+    assert s.gemma_max_labels == 50
+    assert s.gemma_analysis_window_seconds == 60.0
+    assert s.gemma_max_new_tokens_qa == 400
+    assert s.gemma_image_token_budget == 280
+    assert s.gemma_evidence_top_k == 3
+    assert s.gemma_reserve_gb == 12.0
+    assert s.residency_headroom_gb == 2.0
+
+
+def test_gemma_model_id_from_env(monkeypatch):
+    monkeypatch.setenv("GEMMA_MODEL_ID", "google/gemma-4-E4B-it")
+    s = Settings(allow_unauthenticated=True)
+    assert s.gemma_model_id == "google/gemma-4-E4B-it"
+
+
+def test_gemma_enabled_from_env(monkeypatch):
+    monkeypatch.setenv("GEMMA_ENABLED", "false")
+    s = Settings(allow_unauthenticated=True)
+    assert s.gemma_enabled is False
+
+
+def test_gemma_max_frames_clamped_to_cap():
+    s = Settings(allow_unauthenticated=True, gemma_max_frames=99)
+    assert s.effective_gemma_max_frames == 16
+    assert Settings(allow_unauthenticated=True, gemma_max_frames=5).effective_gemma_max_frames == 5

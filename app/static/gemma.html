@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>clipCC — Gemma 4</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 0; background: #f5f6f8; color: #1c1e21; }
+  .container { max-width: 860px; margin: 0 auto; padding: 24px; }
+  nav { display: flex; align-items: center; margin-bottom: 16px; border-bottom: 1px solid #ddd; padding-bottom: 8px; }
+  nav a { margin-right: 16px; text-decoration: none; color: #1a73e8; }
+  nav a.active { font-weight: bold; color: #1c1e21; }
+  .reset-all { margin: 0 0 0 auto; background: #f3f4f6; color: #374151; border: 1px solid #d0d0d0;
+               border-radius: 4px; padding: 5px 12px; font-size: 13px; }
+  .reset-all:hover { background: #fee2e2; border-color: #dc2626; color: #dc2626; }
+  .card { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .status-pill { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 13px; }
+  .status-idle { background: #eee; } .status-loading { background: #fff3cd; }
+  .status-loaded { background: #d4edda; } .status-failed { background: #f8d7da; }
+  label { display: block; margin: 10px 0 4px; font-weight: 600; font-size: 14px; }
+  input[type=text], textarea, select { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+  input[type=range] { width: 100%; accent-color: #7b1fa2; }
+  button { background: #1a73e8; color: #fff; border: none; border-radius: 4px; padding: 10px 18px; font-size: 14px; cursor: pointer; margin-top: 12px; }
+  button:disabled { background: #aaa; cursor: not-allowed; }
+  .bar-row { display: flex; align-items: center; margin: 6px 0; gap: 8px; }
+  .bar-label { width: 220px; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar-track { flex: 1; background: #eee; border-radius: 4px; height: 18px; position: relative; }
+  .bar-fill { background: #7b1fa2; height: 100%; border-radius: 4px; }
+  .bar-value { width: 48px; font-size: 13px; text-align: right; }
+  .evidence { font-size: 12px; color: #555; margin: 0 0 8px 228px; white-space: pre-wrap; }
+  #qaAnswer { white-space: pre-wrap; font-size: 14px; }
+  .meta { font-size: 12px; color: #666; margin-top: 12px; white-space: pre-wrap; }
+  .error { color: #b00020; white-space: pre-wrap; font-size: 13px; }
+  .disclaimer { font-size: 12px; color: #8a6d3b; background: #fcf8e3; padding: 8px; border-radius: 4px; margin-top: 10px; }
+  .csv-row { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .csv-btn { display: inline-block; background: #f3f4f6; color: #374151; border: 1px solid #d0d0d0;
+             border-radius: 4px; padding: 6px 12px; font-size: 13px; font-weight: 400; cursor: pointer; margin: 0; }
+  .csv-btn:hover { background: #e5e7eb; }
+  .csv-btn.danger:hover { background: #fee2e2; border-color: #dc2626; color: #dc2626; }
+  .hint { font-size: 12px; color: #666; }
+  .label-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 6px 0 8px; }
+  .label-chip { padding: 5px 12px; border: 1px solid #d0d0d0; border-radius: 999px; font-size: 13px;
+                font-family: inherit; cursor: pointer; background: #fff; color: #374151; user-select: none; margin: 0;
+                transition: background .15s, color .15s, border-color .15s; }
+  .label-chip:hover { border-color: #1a73e8; }
+  .label-chip.active { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+  .label-chip.csv.active { background: #16a34a; border-color: #16a34a; }
+  .label-row { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+  .label-row input[type=text] { flex: 1; margin: 0; }
+  .preview { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.5;
+             background: #f6f8fa; color: #24292f; border: 1px solid #d0d7de; border-radius: 4px;
+             padding: 10px 12px; margin: 4px 0 0; max-height: 260px; overflow: auto;
+             white-space: pre-wrap; word-break: break-word; }
+  /* cute "Analyzing…" state: a filmstrip of frames lifting/glowing in a wave */
+  .analyzing { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 22px 0 26px; }
+  .filmstrip { display: flex; gap: 5px; }
+  .filmstrip span { width: 24px; height: 17px; border-radius: 3px; background: #ede9fe;
+                    border: 1px solid #ddd6fe; animation: frameScan 1.1s ease-in-out infinite; }
+  .filmstrip span:nth-child(2){animation-delay:.09s} .filmstrip span:nth-child(3){animation-delay:.18s}
+  .filmstrip span:nth-child(4){animation-delay:.27s} .filmstrip span:nth-child(5){animation-delay:.36s}
+  .filmstrip span:nth-child(6){animation-delay:.45s} .filmstrip span:nth-child(7){animation-delay:.54s}
+  .filmstrip span:nth-child(8){animation-delay:.63s}
+  @keyframes frameScan {
+    0%,100% { transform: translateY(0) scaleY(.8); opacity: .4; }
+    50% { transform: translateY(-5px) scaleY(1); opacity: 1;
+          background: linear-gradient(135deg, #a855f7, #7b1fa2); border-color: #7b1fa2;
+          box-shadow: 0 3px 9px rgba(123,31,162,.28); }
+  }
+  .analyzing-text { font-size: 15px; color: #4b5563; font-weight: 600; }
+  .analyzing-timer { color: #9ca3af; font-weight: 400; font-size: 13px; margin-left: 4px; }
+  .dots i { font-style: normal; animation: blink 1.4s infinite both; }
+  .dots i:nth-child(2){animation-delay:.2s} .dots i:nth-child(3){animation-delay:.4s}
+  @keyframes blink { 0%,80%,100%{opacity:0} 40%{opacity:1} }
+  .spinner { display:inline-block; width:13px; height:13px; vertical-align:-2px; margin-right:7px;
+             border:2px solid rgba(255,255,255,.45); border-top-color:#fff; border-radius:50%;
+             animation: spin .7s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  /* indeterminate "Warming model…" bar — status reports no %, so the bar slides */
+  .warm-progress { margin-top: 12px; }
+  .warm-bar { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; position: relative; }
+  .warm-bar span { position: absolute; left: -40%; width: 40%; height: 100%; border-radius: 4px;
+                   background: linear-gradient(90deg, #c084fc, #7b1fa2); animation: warmSlide 1.2s ease-in-out infinite; }
+  @keyframes warmSlide { 0% { left: -40%; } 100% { left: 100%; } }
+  .warm-text { font-size: 13px; color: #4b5563; font-weight: 600; margin-top: 6px; }
+  @media (prefers-reduced-motion: reduce) {
+    .filmstrip span, .dots i, .spinner { animation: none; }
+    .filmstrip span { opacity: .8; }
+    .warm-bar span { animation: none; left: 0; width: 100%; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>clipCC</h1>
+  <nav>
+    <a href="/">SigLIP2</a>
+    <a href="/gemma" class="active">Gemma 4</a>
+    <a href="/hybrid">Hybrid</a>
+    <button id="resetAllBtn" type="button" class="reset-all" title="Clear this page's saved settings">Reset All</button>
+  </nav>
+
+  <div class="card">
+    <strong>Model:</strong> <span id="modelId"></span>
+    <span id="statusPill" class="status-pill status-idle">idle</span>
+    <span id="statusError" class="error"></span>
+    <div><button id="warmBtn">Warm model</button></div>
+    <div id="warmProgress" class="warm-progress" role="status" aria-live="polite" style="display:none;">
+      <div class="warm-bar" aria-hidden="true"><span></span></div>
+      <div class="warm-text">Warming model<span class="dots"><i>.</i><i>.</i><i>.</i></span><span id="warmTimer" class="analyzing-timer"></span></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <label for="videoInput">Video (mp4/avi/mov/mkv; first 60&nbsp;s analyzed by default)</label>
+    <input type="file" id="videoInput" accept=".mp4,.avi,.mov,.mkv">
+    <label for="windowStart">Analysis window start (seconds)</label>
+    <input type="text" id="windowStart" value="0">
+    <label for="frameCount">Frames analyzed: <span id="frameCountVal">8</span> <span class="hint">(1–16; needs a window ≥ frames × 0.5&nbsp;s)</span></label>
+    <input type="range" id="frameCount" min="1" max="16" step="1" value="8">
+    <label for="modeSelect">Mode</label>
+    <select id="modeSelect">
+      <option value="label_scores">Label scores</option>
+      <option value="qa">Ask (free-form Q&amp;A)</option>
+    </select>
+    <div id="labelsField">
+      <label>Labels <span class="hint">(click a chip to enable/disable · 1–50)</span></label>
+      <div class="label-chips" id="labelChips"></div>
+      <div class="label-row">
+        <input type="text" id="labelsInput" placeholder="Add custom labels (comma-separated)">
+        <label class="csv-btn" for="csvInput">Import CSV</label>
+        <input type="file" id="csvInput" accept=".csv,.txt" style="display:none">
+        <button type="button" id="csvClearBtn" class="csv-btn danger" style="display:none">Clear CSV</button>
+      </div>
+      <p class="hint">Toggle presets, type custom labels, or import a CSV. Only enabled labels are sent.</p>
+      <label for="instructionInput">Prompt instruction <span class="hint">(JSON output format is fixed)</span></label>
+      <textarea id="instructionInput" rows="3"></textarea>
+      <div class="csv-row">
+        <button type="button" id="resetInstructionBtn" class="csv-btn">Reset to default</button>
+        <span class="hint">Edit how Gemma is told to judge the behaviors. The numbered labels and the strict JSON contract are appended automatically.</span>
+      </div>
+      <label for="promptPreview">Final prompt sent to Gemma <span class="hint">(read-only preview — updates as you type)</span></label>
+      <pre id="promptPreview" class="preview" aria-live="polite"></pre>
+    </div>
+    <div id="promptField" style="display:none;">
+      <label for="promptInput">Question</label>
+      <textarea id="promptInput" rows="2" placeholder="What is the driver doing?"></textarea>
+    </div>
+    <button id="runBtn" disabled>Analyze</button>
+  </div>
+
+  <div class="card" id="resultsCard" style="display:none;">
+    <h3>Results</h3>
+    <div id="analyzing" class="analyzing" role="status" aria-live="polite" style="display:none;">
+      <div class="filmstrip" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+      <div class="analyzing-text">Analyzing<span class="dots"><i>.</i><i>.</i><i>.</i></span><span id="analyzeTimer" class="analyzing-timer"></span></div>
+    </div>
+    <div id="scoresView"></div>
+    <div id="qaAnswer"></div>
+    <div id="disclaimer" class="disclaimer" style="display:none;"></div>
+    <div id="metaView" class="meta"></div>
+    <details id="rawOutput" style="display:none; margin-top:12px;">
+      <summary>Raw model output</summary>
+      <pre id="rawOutputText" class="preview"></pre>
+    </details>
+    <div id="errView" class="error"></div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let pollTimer = null;
+let defaultInstruction = '';
+let lockedContract = '';
+let instructionInitialized = false;
+let warmTimer = null;
+
+// Indeterminate progress while the model loads. status reports only a state
+// (loading/loaded), not a %, so the bar slides and a timer counts up like the
+// Analyze state. t0 is set when we first observe 'loading', so a reload
+// mid-warm restarts the elapsed count (best-effort, not the true load start).
+function startWarmProgress() {
+  if (warmTimer) return;
+  $('warmProgress').style.display = '';
+  const t0 = performance.now();
+  const tick = () => { $('warmTimer').textContent = ((performance.now() - t0) / 1000).toFixed(1) + 's'; };
+  tick();
+  warmTimer = setInterval(tick, 100);
+}
+function stopWarmProgress() {
+  if (warmTimer) { clearInterval(warmTimer); warmTimer = null; }
+  $('warmProgress').style.display = 'none';
+}
+
+async function fetchStatus() {
+  try {
+    const r = await fetch('/api/v1/gemma/status');
+    const s = await r.json();
+    $('modelId').textContent = s.model_id;
+    if (typeof s.default_label_instruction === 'string') {
+      defaultInstruction = s.default_label_instruction;
+      // prefill once; never clobber a user's edits on later status polls
+      if (!instructionInitialized && !$('instructionInput').value) {
+        $('instructionInput').value = defaultInstruction;
+        instructionInitialized = true;
+      }
+    }
+    if (typeof s.label_scores_contract === 'string') lockedContract = s.label_scores_contract;
+    updatePreview();
+    const pill = $('statusPill');
+    pill.textContent = s.state;
+    pill.className = 'status-pill status-' + s.state;
+    $('statusError').textContent = s.error || '';
+    $('runBtn').disabled = s.state !== 'loaded';
+    $('warmBtn').disabled = (s.state === 'loading' || s.state === 'loaded');
+    if (s.state === 'loading') {
+      startWarmProgress();
+      if (!pollTimer) pollTimer = setInterval(fetchStatus, 3000);
+    } else {
+      stopWarmProgress();
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+  } catch (e) { $('statusError').textContent = String(e); }
+}
+
+$('warmBtn').addEventListener('click', async () => {
+  try {
+    const r = await fetch('/api/v1/gemma/warm', { method: 'POST' });
+    if (!r.ok) { const b = await r.json().catch(() => ({})); $('statusError').textContent = b.detail || r.statusText; }
+    fetchStatus();
+  } catch (e) { $('statusError').textContent = String(e); }
+});
+
+$('modeSelect').addEventListener('change', () => {
+  const qa = $('modeSelect').value === 'qa';
+  $('labelsField').style.display = qa ? 'none' : '';
+  $('promptField').style.display = qa ? '' : 'none';
+});
+
+$('resetInstructionBtn').addEventListener('click', () => {
+  $('instructionInput').value = defaultInstruction;
+  updatePreview();
+  saveState();
+});
+
+// Label chips — same enable/disable-by-click behavior as the SigLIP2 page.
+// Presets (and CSV imports) are toggleable chips; the text input adds custom
+// comma-separated labels. Effective labels = enabled chips + custom input.
+let defaultLabels = [];
+let selectedLabels = {};
+let csvLabels = [];
+
+// ---- per-page state persistence (localStorage; independent from SigLIP2) ----
+const GKEY = 'clipcc.gemma.v1';
+let savedState = null;
+try { savedState = JSON.parse(localStorage.getItem(GKEY)); } catch (e) { savedState = null; }
+
+function saveState() {
+  try {
+    localStorage.setItem(GKEY, JSON.stringify({
+      windowStart: $('windowStart').value,
+      frameCount: $('frameCount').value,
+      mode: $('modeSelect').value,
+      labelsInput: $('labelsInput').value,
+      instruction: $('instructionInput').value,
+      prompt: $('promptInput').value,
+      csvLabels: csvLabels,
+      disabled: defaultLabels.concat(csvLabels).filter((l) => !selectedLabels[l]),
+    }));
+  } catch (e) {}
+}
+
+// Restore the synchronous fields now; chip selection is applied once the preset
+// chips exist (after the defaults fetch below).
+if (savedState) {
+  if (typeof savedState.windowStart === 'string') $('windowStart').value = savedState.windowStart;
+  if (typeof savedState.frameCount === 'string') $('frameCount').value = savedState.frameCount;
+  if (typeof savedState.labelsInput === 'string') $('labelsInput').value = savedState.labelsInput;
+  if (typeof savedState.prompt === 'string') $('promptInput').value = savedState.prompt;
+  if (typeof savedState.instruction === 'string') {
+    $('instructionInput').value = savedState.instruction;
+    instructionInitialized = true;   // keep restored text; don't let status prefill overwrite it
+  }
+  if (Array.isArray(savedState.csvLabels)) csvLabels = savedState.csvLabels.slice();
+  if (typeof savedState.mode === 'string') {
+    $('modeSelect').value = savedState.mode;
+    const qa = savedState.mode === 'qa';
+    $('labelsField').style.display = qa ? 'none' : '';
+    $('promptField').style.display = qa ? '' : 'none';
+  }
+}
+
+// Frame-count slider: live label update + initial sync after any restore above.
+$('frameCount').addEventListener('input', () => { $('frameCountVal').textContent = $('frameCount').value; });
+$('frameCountVal').textContent = $('frameCount').value;
+
+function applySavedChipSelection() {
+  if (!savedState || !Array.isArray(savedState.disabled)) return;
+  const dis = new Set(savedState.disabled);
+  [...$('labelChips').children].forEach((chip) => {
+    if (dis.has(chip.textContent)) { selectedLabels[chip.textContent] = false; chip.classList.remove('active'); }
+  });
+  updatePreview();
+}
+
+function renderLabelChips(labels, extraClass) {
+  labels.forEach((lbl) => {
+    if (Object.prototype.hasOwnProperty.call(selectedLabels, lbl)) return;
+    const cls = 'label-chip' + (extraClass ? ' ' + extraClass : '');
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = cls + ' active';
+    chip.textContent = lbl;                              // textContent: labels are user/CSV text
+    selectedLabels[lbl] = true;
+    chip.addEventListener('click', () => {
+      selectedLabels[lbl] = !selectedLabels[lbl];
+      chip.className = selectedLabels[lbl] ? cls + ' active' : cls;
+      updatePreview();
+      saveState();
+    });
+    $('labelChips').appendChild(chip);
+  });
+}
+
+function rebuildChips() {
+  const c = $('labelChips');
+  while (c.firstChild) c.removeChild(c.firstChild);
+  selectedLabels = {};
+  renderLabelChips(defaultLabels);
+  if (csvLabels.length) renderLabelChips(csvLabels, 'csv');
+  $('csvClearBtn').style.display = csvLabels.length ? '' : 'none';
+  updatePreview();
+}
+
+// Effective label list: enabled chips (presets + CSV) plus the custom
+// comma-separated input, deduped — used by the prompt preview and submit.
+function currentLabels() {
+  const chips = defaultLabels.concat(csvLabels).filter((lbl) => selectedLabels[lbl]);
+  const custom = $('labelsInput').value.trim()
+    ? $('labelsInput').value.split(',').map((s) => s.trim()).filter(Boolean)
+    : [];
+  const seen = Object.create(null), out = [];
+  chips.concat(custom).forEach((lbl) => { if (!seen[lbl]) { seen[lbl] = true; out.push(lbl); } });
+  return out;
+}
+
+// Reconstruct the exact final prompt the server will build: editable instruction
+// (or default when blank) + numbered behaviors + the locked JSON contract.
+function buildPreview() {
+  const instr = ($('instructionInput').value || '').trim() || defaultInstruction;
+  const numbered = currentLabels().map((l, i) => (i + 1) + ': ' + l).join('\n');
+  return instr + '\n\nBehaviors:\n' + numbered + '\n\n' + lockedContract;
+}
+function updatePreview() {
+  $('promptPreview').textContent = buildPreview();   // textContent: labels/instruction are user text
+}
+$('instructionInput').addEventListener('input', updatePreview);
+$('labelsInput').addEventListener('input', updatePreview);
+
+$('csvInput').addEventListener('change', () => {
+  const file = $('csvInput').files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const lines = e.target.result.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    lines.forEach((lbl) => { if (csvLabels.indexOf(lbl) === -1) csvLabels.push(lbl); });
+    rebuildChips();
+    saveState();
+  };
+  reader.readAsText(file);
+  $('csvInput').value = '';
+});
+
+$('csvClearBtn').addEventListener('click', () => {
+  csvLabels = [];
+  rebuildChips();
+  saveState();
+});
+
+// Preset labels (same source as the SigLIP2 page); fall back to the driving set.
+fetch('/api/v1/labels/defaults')
+  .then((r) => r.json())
+  .then((data) => { defaultLabels = (data && data.labels) || []; rebuildChips(); applySavedChipSelection(); })
+  .catch(() => {
+    defaultLabels = ['texting while driving', 'sleeping while driving', 'eating while driving'];
+    rebuildChips();
+    applySavedChipSelection();
+  });
+
+function renderScores(scores) {
+  const view = $('scoresView');
+  view.replaceChildren();
+  for (const item of scores) {
+    const row = document.createElement('div'); row.className = 'bar-row';
+    const lab = document.createElement('div'); lab.className = 'bar-label';
+    lab.textContent = item.label;                       // textContent: model output is untrusted
+    const track = document.createElement('div'); track.className = 'bar-track';
+    const fill = document.createElement('div'); fill.className = 'bar-fill';
+    fill.style.width = (item.score === null ? 0 : item.score * 100) + '%';
+    track.appendChild(fill);
+    const val = document.createElement('div'); val.className = 'bar-value';
+    val.textContent = item.score === null ? 'n/a' : item.score.toFixed(2);
+    row.append(lab, track, val);
+    view.appendChild(row);
+    if (item.evidence) {
+      const ev = document.createElement('p'); ev.className = 'evidence';
+      ev.textContent = item.evidence;                   // textContent, never innerHTML
+      view.appendChild(ev);
+    }
+  }
+}
+
+$('runBtn').addEventListener('click', async () => {
+  const file = $('videoInput').files[0];
+  if (!file) { alert('Choose a video first.'); return; }
+  const mode = $('modeSelect').value;
+  if (mode === 'label_scores' && currentLabels().length === 0) { alert('Select or add at least one label.'); return; }
+  const fd = new FormData();
+  fd.append('video', file);
+  fd.append('window_start', $('windowStart').value || '0');
+  fd.append('max_frames', $('frameCount').value);
+  if (mode === 'label_scores') {
+    fd.append('labels', JSON.stringify(currentLabels()));
+    fd.append('instruction', $('instructionInput').value);
+  } else fd.append('prompt', $('promptInput').value);
+
+  $('resultsCard').style.display = '';
+  $('scoresView').replaceChildren(); $('qaAnswer').textContent = '';
+  $('metaView').textContent = ''; $('errView').textContent = '';
+  $('disclaimer').style.display = 'none';
+  $('rawOutput').style.display = 'none'; $('rawOutputText').textContent = '';
+  $('analyzing').style.display = '';
+  $('runBtn').disabled = true;
+  $('runBtn').innerHTML = '<span class="spinner"></span>Analyzing…';
+  const t0 = performance.now();
+  const analyzeTimer = setInterval(() => {
+    $('analyzeTimer').textContent = ((performance.now() - t0) / 1000).toFixed(1) + 's';
+  }, 100);
+  try {
+    const r = await fetch('/api/v1/gemma/' + mode, { method: 'POST', body: fd });
+    const body = await r.json();
+    if (!r.ok) { $('errView').textContent = (body.detail || r.statusText); return; }
+    if (mode === 'label_scores') {
+      renderScores(body.scores);
+      $('disclaimer').textContent = body.metadata.disclaimer;
+      $('disclaimer').style.display = '';
+    } else {
+      $('qaAnswer').textContent = body.answer;          // textContent: XSS rule (spec §9)
+    }
+    // raw model text: label_scores returns it pre-parse; qa's answer IS the raw text
+    const raw = mode === 'label_scores' ? body.raw_output : body.answer;
+    if (raw) { $('rawOutputText').textContent = raw; $('rawOutput').style.display = ''; }  // textContent: untrusted
+    const md = body.metadata;
+    const wall = ((performance.now() - t0) / 1000).toFixed(1);
+    $('metaView').textContent =
+      `window: ${md.window_start_seconds}–${md.window_end_seconds}s of ${md.video_duration_seconds.toFixed(1)}s | ` +
+      `frames: ${md.frames_analyzed} | device: ${md.device}\n` +
+      `latency — extract: ${md.latency.extract_seconds}s, generate: ${md.latency.generate_seconds}s, ` +
+      `parse: ${md.latency.parse_seconds}s, wall: ${wall}s | parse retries: ${md.parse_retries}`;
+  } catch (e) {
+    $('errView').textContent = String(e);
+  } finally {
+    clearInterval(analyzeTimer);
+    $('analyzing').style.display = 'none';
+    $('runBtn').disabled = false;
+    $('runBtn').textContent = 'Analyze';
+    fetchStatus();
+  }
+});
+
+// Persist text-input / select changes (chips, CSV and reset save explicitly).
+document.querySelector('.container').addEventListener('input', saveState);
+document.querySelector('.container').addEventListener('change', saveState);
+
+// Reset All — clears only this page's saved state, then reloads to defaults.
+$('resetAllBtn').addEventListener('click', () => {
+  if (confirm("Reset this page's saved settings to defaults?")) {
+    try { localStorage.removeItem(GKEY); } catch (e) {}
+    location.reload();
+  }
+});
+
+fetchStatus();
+</script>
+</body>
+</html>

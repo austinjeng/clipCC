@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>clipCC — Hybrid</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 880px; margin: 24px auto; padding: 0 16px; color: #1a1a1a; }
+    nav { display: flex; align-items: center; margin-bottom: 16px; border-bottom: 1px solid #ddd; padding-bottom: 8px; }
+    nav a { margin-right: 16px; text-decoration: none; color: #0366d6; }
+    nav a.active { font-weight: bold; color: #1a1a1a; }
+    .card { border: 1px solid #e1e4e8; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    label { display: block; font-size: 13px; font-weight: 600; margin: 8px 0 4px; }
+    input, select, textarea { width: 100%; box-sizing: border-box; padding: 6px; font-size: 14px; }
+    .row { display: flex; gap: 12px; } .row > div { flex: 1; }
+    button { padding: 8px 14px; font-size: 14px; cursor: pointer; }
+    .pill { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; color: #fff; }
+    .pill.loaded { background: #28a745; } .pill.idle, .pill.loading { background: #6a737d; } .pill.failed { background: #d73a49; }
+    .result { border: 1px solid #e1e4e8; border-radius: 8px; padding: 12px; margin-bottom: 10px; }
+    .result.skipped { opacity: 0.55; }
+    .bar { height: 8px; background: #eee; border-radius: 4px; overflow: hidden; }
+    .bar > span { display: block; height: 100%; background: #0366d6; }
+    .verdict { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; color: #fff; }
+    .verdict.present { background: #28a745; } .verdict.not_present { background: #d73a49; } .verdict.uncertain { background: #6a737d; }
+    .thumbs img { height: 72px; margin: 4px 4px 0 0; border-radius: 4px; vertical-align: top; }
+    .muted { color: #6a737d; font-size: 12px; }
+    #error { color: #d73a49; }
+  </style>
+</head>
+<body>
+  <nav>
+    <a href="/">SigLIP2</a>
+    <a href="/gemma">Gemma 4</a>
+    <a href="/hybrid" class="active">Hybrid</a>
+  </nav>
+
+  <h1>Hybrid: SigLIP2 → top-k → Gemma</h1>
+  <p class="muted">SigLIP2 scores every frame; labels above the threshold get their top-k frames verified by Gemma.</p>
+
+  <div class="card">
+    <strong>SigLIP2 model:</strong>
+    <div class="row">
+      <div><select id="modelSelect"></select></div>
+      <div style="flex:0"><button id="loadBtn">Load</button></div>
+    </div>
+    <div class="muted" id="modelStatus">—</div>
+  </div>
+
+  <div class="card">
+    <strong>Gemma:</strong> <span id="gemmaPill" class="pill idle">idle</span>
+    <button id="warmBtn">Warm model</button>
+  </div>
+
+  <div class="card">
+    <label>Video</label>
+    <input type="file" id="video" accept="video/*" />
+    <label>Labels (one per line)</label>
+    <textarea id="labels" rows="3">texting while driving
+eating while driving
+sleeping while driving</textarea>
+    <div class="row">
+      <div><label>Aggregation</label>
+        <select id="aggregation"><option value="max">max (did it occur?)</option><option value="mean">mean</option></select></div>
+      <div><label>Threshold</label><input type="number" id="threshold" value="0.5" min="0" max="1" step="0.05" /></div>
+    </div>
+    <div class="row">
+      <div><label>Top-k frames / label</label><input type="number" id="topk" value="3" min="1" max="16" /></div>
+      <div><label>Max verified labels</label><input type="number" id="maxlabels" value="6" min="1" /></div>
+    </div>
+    <label>Gemma instruction (optional)</label>
+    <input type="text" id="instruction" placeholder="Leave blank for the default verdict instruction" />
+    <p><button id="runBtn">Run Hybrid</button> <span id="status" class="muted"></span></p>
+    <p id="error"></p>
+  </div>
+
+  <div id="results"></div>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    async function refreshModels() {
+      try {
+        const r = await fetch('/api/v1/models');
+        const data = await r.json();
+        const models = Array.isArray(data) ? data : (data.models || []);
+        $('modelSelect').innerHTML = models
+          .map((m) => `<option value="${m.model_id}">${m.display_name || m.model_id}</option>`).join('');
+        const active = await (await fetch('/api/v1/models/active')).json();
+        if (active && active.model_id) {
+          $('modelSelect').value = active.model_id;
+          $('modelStatus').textContent = 'Loaded: ' + (active.display_name || active.model_id);
+        }
+      } catch (e) { $('modelStatus').textContent = 'Could not list models.'; }
+    }
+
+    $('loadBtn').onclick = async () => {
+      $('modelStatus').textContent = 'Loading…';
+      const r = await fetch('/api/v1/models/load', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model_id: $('modelSelect').value }),
+      });
+      const body = await r.json();
+      $('modelStatus').textContent = r.ok ? ('Loaded: ' + body.model_id) : ('Error: ' + body.detail);
+    };
+
+    async function refreshGemma() {
+      try {
+        const s = await (await fetch('/api/v1/gemma/status')).json();
+        const pill = $('gemmaPill');
+        pill.textContent = s.state;
+        pill.className = 'pill ' + s.state;
+      } catch (e) {}
+    }
+    $('warmBtn').onclick = async () => { await fetch('/api/v1/gemma/warm', { method: 'POST' }); setTimeout(refreshGemma, 500); };
+
+    function renderResults(body) {
+      const wrap = $('results');
+      wrap.innerHTML = '<h2>Results</h2>' +
+        `<p class="muted">${body.metadata.gemma_calls} Gemma call(s); ` +
+        `${body.metadata.labels_truncated} label(s) truncated by the cap. ` +
+        `SigLIP2 ${body.metadata.latency.siglip2_seconds}s, Gemma ${body.metadata.latency.gemma_seconds}s.</p>` +
+        `<p class="muted">${body.metadata.disclaimer}</p>`;
+      body.results.forEach((r) => {
+        const pct = Math.round(r.siglip2_score * 100);
+        let html = `<div class="result ${r.gemma_evaluated ? '' : 'skipped'}">`;
+        html += `<strong>${r.label}</strong> `;
+        if (r.gemma_evaluated) {
+          html += `<span class="verdict ${r.verdict}">${r.verdict}</span>`;
+          if (r.parse_failed) html += ' <span class="muted">(parse failed)</span>';
+        } else {
+          html += '<span class="muted">not verified (below threshold or capped)</span>';
+        }
+        html += `<div class="bar"><span style="width:${pct}%"></span></div>`;
+        html += `<div class="muted">SigLIP2 ${r.siglip2_score.toFixed(3)}</div>`;
+        if (r.explanation) html += `<div>${r.explanation}</div>`;
+        if (r.frames_shown && r.frames_shown.length) {
+          html += '<div class="thumbs">' +
+            r.frames_shown.map((f) => `<img src="${f.thumbnail}" title="t=${f.timestamp_seconds}s score=${f.score}" />`).join('') +
+            '</div>';
+        }
+        html += '</div>';
+        wrap.innerHTML += html;
+      });
+    }
+
+    $('runBtn').onclick = async () => {
+      $('error').textContent = '';
+      const file = $('video').files[0];
+      if (!file) { $('error').textContent = 'Choose a video first.'; return; }
+      const labels = $('labels').value.split('\n').map((s) => s.trim()).filter(Boolean);
+      const form = new FormData();
+      form.append('video', file);
+      form.append('labels', JSON.stringify(labels));
+      form.append('aggregation', $('aggregation').value);
+      form.append('threshold', $('threshold').value);
+      form.append('top_k', $('topk').value);
+      form.append('max_verified_labels', $('maxlabels').value);
+      if ($('instruction').value.trim()) form.append('instruction', $('instruction').value.trim());
+      $('status').textContent = 'Running…';
+      $('runBtn').disabled = true;
+      try {
+        const r = await fetch('/api/v1/hybrid', { method: 'POST', body: form });
+        const body = await r.json();
+        if (!r.ok) { $('error').textContent = body.detail || 'Request failed.'; $('results').innerHTML = ''; }
+        else renderResults(body);
+      } catch (e) { $('error').textContent = String(e); }
+      finally { $('status').textContent = ''; $('runBtn').disabled = false; }
+    };
+
+    refreshModels(); refreshGemma(); setInterval(refreshGemma, 4000);
+  </script>
+</body>
+</html>

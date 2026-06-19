@@ -11,9 +11,11 @@ except ImportError:
 
 
 class ResourceGates:
-    def __init__(self, max_upload_concurrency: int = 4, max_inference_concurrency: int = 2):
+    def __init__(self, max_upload_concurrency: int = 4, max_inference_concurrency: int = 2,
+                 max_vlm_concurrency: int = 1):
         self._upload_limiter = anyio.CapacityLimiter(max_upload_concurrency)
         self._inference_limiter = anyio.CapacityLimiter(max_inference_concurrency)
+        self._vlm_limiter = anyio.CapacityLimiter(max_vlm_concurrency)
 
     @asynccontextmanager
     async def upload_admission(self):
@@ -38,3 +40,17 @@ class ResourceGates:
             yield
         finally:
             self._inference_limiter.release_on_behalf_of(token)
+
+    @asynccontextmanager
+    async def vlm_admission(self):
+        # Dedicated limiter: a tens-of-seconds Gemma generation must never
+        # starve SigLIP2 classify traffic (which shares inference_admission).
+        token = object()
+        try:
+            self._vlm_limiter.acquire_on_behalf_of_nowait(token)
+        except _WOULD_BLOCK:
+            raise InferenceConcurrencyError()
+        try:
+            yield
+        finally:
+            self._vlm_limiter.release_on_behalf_of(token)

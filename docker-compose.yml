@@ -14,6 +14,8 @@ services:
       - MAX_CONCURRENT_REQUESTS=2
       - ALLOW_UNAUTHENTICATED=true
       - DEFAULT_MODEL_ID=siglip2-base-patch16-256
+      # Gemma 4 E2B / hybrid mode is GPU-only in practice (CPU = fp32 ≈22GB resident).
+      - GEMMA_ENABLED=false
     profiles: ["cpu"]
 
   clipcc-cpu-build:
@@ -33,6 +35,8 @@ services:
       - MAX_CONCURRENT_REQUESTS=2
       - ALLOW_UNAUTHENTICATED=true
       - DEFAULT_MODEL_ID=siglip2-base-patch16-256
+      # Gemma 4 E2B / hybrid mode is GPU-only in practice (CPU = fp32 ≈22GB resident).
+      - GEMMA_ENABLED=false
     profiles: ["cpu-build"]
 
   clipcc-gpu:
@@ -52,6 +56,8 @@ services:
       - MAX_CONCURRENT_REQUESTS=1
       - ALLOW_UNAUTHENTICATED=true
       - DEFAULT_MODEL_ID=siglip2-so400m-patch14-384
+      # GPU loads Gemma at bf16 (~11.4GB VRAM); warm on demand via POST /api/v1/gemma/warm.
+      - GEMMA_ENABLED=true
     deploy:
       resources:
         reservations:

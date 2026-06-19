@@ -1,0 +1,1137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Gemma Lab — How Gemma 4 scores labels in clipCC</title>
+<link rel="icon" href="data:,">
+<script>document.documentElement.classList.add('js');</script>
+<style>
+:root{
+  --bg:#0c0a12; --bg-2:#13101c; --bg-3:#1a1526; --bg-4:#221b32;
+  --ink:#ECE6F2; --ink-dim:#A79DB8; --ink-faint:#6E6580;
+  --line:rgba(183,148,255,.14); --line-strong:rgba(183,148,255,.28);
+  --violet:#B794FF; --violet-deep:#7b1fa2; --amber:#F2B05E; --green:#79E0A8; --red:#FF7A8A; --sky:#79C7E0;
+  /* system-font stacks — zero external requests */
+  --display:ui-serif,Georgia,'Times New Roman',serif;
+  --body:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,Roboto,sans-serif;
+  --mono:ui-monospace,'SF Mono',Menlo,Monaco,'Cascadia Code',monospace;
+  --maxw:980px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:17px;line-height:1.65;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;overflow-x:hidden}
+body::before{content:"";position:fixed;inset:0;z-index:-2;background:
+  radial-gradient(900px 600px at 78% -8%, rgba(123,31,162,.34), transparent 60%),
+  radial-gradient(760px 520px at 8% 6%, rgba(96,60,160,.20), transparent 62%),
+  radial-gradient(1200px 900px at 50% 120%, rgba(242,176,94,.07), transparent 60%),
+  var(--bg)}
+body::after{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background-image:radial-gradient(rgba(183,148,255,.075) 1px, transparent 1.4px);background-size:26px 26px;-webkit-mask-image:radial-gradient(ellipse 80% 70% at 50% 30%, #000 35%, transparent 100%);mask-image:radial-gradient(ellipse 80% 70% at 50% 30%, #000 35%, transparent 100%);opacity:.6}
+.grain{position:fixed;inset:0;z-index:0;pointer-events:none;opacity:.035;mix-blend-mode:overlay;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+.wrap{position:relative;z-index:1;max-width:var(--maxw);margin:0 auto;padding:0 28px 120px}
+h1,h2,h3{font-family:var(--display);font-weight:600;letter-spacing:-.01em;line-height:1.1}
+.mono{font-family:var(--mono)}
+.eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.26em;text-transform:uppercase;color:var(--violet);font-weight:600}
+a{color:var(--violet)}
+code{font-family:var(--mono);font-size:.86em;background:rgba(183,148,255,.10);border:1px solid var(--line);padding:.08em .4em;border-radius:5px;color:#E2D6FB}
+strong{color:#fff;font-weight:700}
+em{color:var(--amber);font-style:normal;font-weight:600}
+button{font-family:var(--body);cursor:pointer}
+:focus-visible{outline:2px solid var(--amber);outline-offset:2px;border-radius:4px}
+
+/* ---- top progress rail ---- */
+.rail{position:fixed;top:0;left:0;right:0;z-index:40;display:flex;align-items:center;gap:14px;padding:8px 16px;background:rgba(12,10,18,.82);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+.rail .lvl{font-family:var(--mono);font-size:12px;color:var(--violet);white-space:nowrap}
+.xpbar{flex:1;max-width:320px;height:8px;background:var(--bg-3);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.xpfill{height:100%;width:0;background:linear-gradient(90deg,var(--violet-deep),var(--violet),var(--amber));transition:width .5s cubic-bezier(.2,.7,.2,1)}
+.badges{display:flex;gap:6px;margin-left:auto}
+.bpip{width:24px;height:24px;border-radius:7px;display:grid;place-items:center;font-size:12px;border:1px solid var(--line);background:var(--bg-2);color:var(--ink-faint);opacity:.4;transition:opacity .3s,transform .3s}
+.bpip.on{opacity:1;color:var(--amber);border-color:var(--line-strong);box-shadow:0 0 12px rgba(242,176,94,.25)}
+@media (max-width:680px){.rail .lvl span.t{display:none}}
+
+/* ---- control pod ---- */
+.pod{position:fixed;right:16px;bottom:16px;z-index:40;display:flex;flex-direction:column;gap:8px;align-items:flex-end}
+.podbtn{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;color:var(--ink-dim);background:rgba(19,16,28,.92);border:1px solid var(--line);border-radius:999px;padding:7px 13px;backdrop-filter:blur(8px)}
+.podbtn .sw{width:9px;height:9px;border-radius:50%;background:var(--ink-faint)}
+.podbtn.on .sw{background:var(--green);box-shadow:0 0 8px var(--green)}
+.podbtn:hover{border-color:var(--line-strong);color:var(--ink)}
+
+/* ---- toast ---- */
+.toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);z-index:60;background:var(--bg-3);border:1px solid var(--line-strong);border-left:3px solid var(--amber);border-radius:10px;padding:11px 18px;font-size:14px;color:var(--ink);opacity:0;pointer-events:none;transition:opacity .3s,transform .3s;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+.toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+/* ---- hero ---- */
+header.hero{padding:104px 0 30px;border-bottom:1px solid var(--line)}
+.hero .eyebrow{display:flex;align-items:center;gap:12px;margin-bottom:24px}
+.hero .eyebrow::after{content:"";height:1px;flex:1;background:linear-gradient(90deg,var(--line-strong),transparent)}
+.hero h1{font-size:clamp(38px,6.4vw,66px);margin:0 0 20px;letter-spacing:-.025em;font-weight:600}
+.hero h1 .accent{font-style:italic;color:var(--violet);font-weight:500}
+.hero .lede{font-size:clamp(18px,2.4vw,21px);color:var(--ink-dim);max-width:46ch;margin:0 0 26px}
+.chips{display:flex;flex-wrap:wrap;gap:9px;margin-bottom:26px}
+.chip{font-family:var(--mono);font-size:12px;color:var(--ink-dim);background:var(--bg-2);border:1px solid var(--line);border-radius:999px;padding:5px 13px;display:inline-flex;align-items:center;gap:7px}
+.chip b{color:var(--ink);font-weight:600}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--violet);box-shadow:0 0 9px var(--violet)}
+.dot.amber{background:var(--amber);box-shadow:0 0 9px var(--amber)}
+.dot.green{background:var(--green);box-shadow:0 0 9px var(--green)}
+.cta{display:inline-flex;align-items:center;gap:10px;font-family:var(--mono);font-size:14px;letter-spacing:.04em;color:#1a1020;background:linear-gradient(90deg,var(--amber),#ffd089);border:none;border-radius:999px;padding:13px 24px;font-weight:600;box-shadow:0 8px 30px rgba(242,176,94,.22)}
+.cta:hover{transform:translateY(-1px)}
+.cta .ar{transition:transform .3s}
+.cta:hover .ar{transform:translateX(3px)}
+
+/* ---- sections ---- */
+section{padding-top:72px}
+.sec-head{display:flex;align-items:baseline;gap:16px;margin-bottom:8px}
+.sec-num{font-family:var(--mono);font-size:13px;color:var(--violet);font-weight:700;letter-spacing:.1em}
+.sec-head h2{font-size:clamp(26px,3.6vw,34px);margin:0;font-weight:600}
+.sec-sub{color:var(--ink-dim);max-width:64ch;margin:6px 0 26px;font-size:16.5px}
+p{margin:0 0 18px}
+.muted{color:var(--ink-dim)}
+
+/* ---- two ways flip ---- */
+.duo{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+.panel{background:var(--bg-2);border:1px solid var(--line);border-radius:14px;padding:22px}
+.panel.cool{border-color:rgba(121,199,224,.22)}
+.panel.warm{border-color:rgba(183,148,255,.26)}
+.panel h3{font-size:18px;margin:0 0 4px;font-family:var(--body);font-weight:700}
+.panel .tag{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);display:block;margin-bottom:14px}
+.panel.cool h3{color:var(--sky)}
+.panel.warm h3{color:var(--violet)}
+.panel ul{margin:0;padding-left:18px;color:var(--ink-dim);font-size:15px;line-height:1.55}
+.panel li{margin-bottom:7px}
+.panel li b{color:var(--ink)}
+
+/* ---- callouts ---- */
+.note{display:grid;grid-template-columns:auto 1fr;gap:14px;align-items:start;background:var(--bg-2);border:1px solid var(--line);border-left:3px solid var(--amber);border-radius:0 12px 12px 0;padding:16px 20px;margin:16px 0;font-size:15px;color:var(--ink-dim)}
+.note .mk{font-family:var(--display);font-style:italic;font-size:22px;color:var(--amber);line-height:1}
+.note.violet{border-left-color:var(--violet)}
+.note.violet .mk{color:var(--violet)}
+.note b{color:var(--ink)}
+.disc{margin-top:14px;background:rgba(242,176,94,.06);border:1px solid rgba(242,176,94,.22);border-radius:12px;padding:18px 20px;font-size:14.5px;color:#E8D9C2}
+.disc .eyebrow{color:var(--amber);margin-bottom:8px}
+
+/* ---- THE LAB ---- */
+.lab{background:linear-gradient(180deg,var(--bg-2),rgba(19,16,28,.4));border:1px solid var(--line-strong);border-radius:18px;padding:22px;position:relative;overflow:hidden}
+.lab::before{content:"";position:absolute;left:0;top:0;right:0;height:2px;background:linear-gradient(90deg,var(--violet),var(--amber),transparent)}
+.lab-controls{display:grid;grid-template-columns:1fr;gap:14px;margin-bottom:18px}
+.ctl-zone{border:1px solid var(--line);border-radius:13px;padding:16px}
+.ctl-zone.zone-a{border-color:rgba(121,224,168,.26);background:rgba(121,224,168,.03)}
+.ctl-zone.zone-b{border-color:rgba(121,199,224,.22);background:rgba(121,199,224,.03)}
+.zone-h{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin-bottom:14px}
+.zone-a .zone-h{color:var(--green)}
+.zone-b .zone-h{color:var(--sky)}
+.zone-h .pill{font-size:10px;letter-spacing:.06em;padding:2px 7px;border-radius:5px;border:1px solid currentColor;opacity:.85}
+.field{margin-bottom:14px}
+.field:last-child{margin-bottom:0}
+.field>label{display:block;font-size:12.5px;color:var(--ink-dim);margin-bottom:7px;font-family:var(--mono)}
+.clipcards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.clipcard{border:1px solid var(--line);border-radius:11px;padding:8px;background:var(--bg);text-align:left;color:var(--ink-dim);transition:border-color .2s,transform .2s}
+.clipcard:hover{border-color:var(--line-strong);transform:translateY(-2px)}
+.clipcard.sel{border-color:var(--violet);box-shadow:0 0 0 1px var(--violet) inset}
+.clipcard .thumb{aspect-ratio:16/10;border-radius:7px;overflow:hidden;background:#08060d;border:1px solid var(--line);margin-bottom:7px}
+.clipcard .thumb svg{width:100%;height:100%;display:block}
+.clipcard .cn{font-size:13px;color:var(--ink);font-weight:600}
+.clipcard .cd{font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+.chipset{display:flex;flex-wrap:wrap;gap:7px;align-items:center}
+.lchip{display:inline-flex;align-items:center;gap:6px;font-size:13px;background:var(--bg-3);border:1px solid var(--line);border-radius:999px;padding:5px 7px 5px 12px;color:var(--ink)}
+.lchip button{background:none;border:none;color:var(--ink-faint);font-size:15px;line-height:1;padding:0 2px}
+.lchip button:hover{color:var(--red)}
+.lchip .num{font-family:var(--mono);font-size:11px;color:var(--amber)}
+.addlabel{display:inline-flex;gap:6px}
+.addlabel input{background:var(--bg);border:1px solid var(--line);border-radius:999px;padding:6px 12px;color:var(--ink);font-size:13px;font-family:var(--body);width:160px}
+.addlabel input:focus{border-color:var(--violet);outline:none}
+.addlabel button{background:var(--bg-3);border:1px solid var(--line);border-radius:999px;color:var(--violet);width:30px;font-size:16px}
+.err{color:var(--red);font-size:12.5px;font-family:var(--mono);margin-top:8px;min-height:1.2em}
+.slider-row{display:flex;align-items:center;gap:14px}
+input[type=range]{flex:1;accent-color:var(--violet);height:4px}
+.sval{font-family:var(--mono);font-size:13px;color:var(--amber);min-width:60px;text-align:right}
+.zb-note{font-size:11.5px;color:var(--ink-faint);margin-top:8px;font-style:italic}
+.readouts{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin:4px 0 16px}
+.ro{background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:10px 12px}
+.ro .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:4px}
+.ro .v{font-family:var(--mono);font-size:13px;color:var(--ink)}
+.ro .v b{color:var(--amber)}
+.runrow{display:flex;gap:10px;align-items:center;margin-bottom:6px;flex-wrap:wrap}
+.runbtn{display:inline-flex;align-items:center;gap:9px;font-family:var(--mono);font-size:14px;color:#1a1020;background:linear-gradient(90deg,var(--violet),#cdb2ff);border:none;border-radius:10px;padding:11px 22px;font-weight:600}
+.runbtn:disabled{opacity:.45;cursor:not-allowed}
+.runbtn.ghost{background:none;color:var(--violet);border:1px solid var(--line-strong)}
+.modetag{font-family:var(--mono);font-size:11px;padding:4px 10px;border-radius:6px;border:1px solid var(--line);margin-left:auto}
+.modetag.ex{color:var(--amber);border-color:rgba(242,176,94,.3);background:rgba(242,176,94,.06)}
+.modetag.tm{color:var(--sky);border-color:rgba(121,199,224,.3);background:rgba(121,199,224,.06)}
+/* stage rail */
+.stagerail{display:flex;gap:6px;flex-wrap:wrap;margin:16px 0}
+.stg{flex:1;min-width:90px;font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;color:var(--ink-faint);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 9px;transition:all .3s}
+.stg .n{color:var(--violet);font-weight:600}
+.stg.active{border-color:var(--violet);color:var(--ink);box-shadow:0 0 0 1px var(--violet) inset}
+.stg.done{border-color:rgba(121,224,168,.4);color:var(--green)}
+.stg.done .n{color:var(--green)}
+/* timeline */
+.timeline{margin:8px 0 4px}
+.tlbar{position:relative;height:34px;background:var(--bg);border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.tlwin{position:absolute;top:0;bottom:0;background:linear-gradient(180deg,rgba(183,148,255,.22),rgba(183,148,255,.06));border-left:1px solid var(--violet);border-right:1px solid var(--violet);width:0;left:0;transition:left .5s,width .5s}
+.tlmark{position:absolute;top:50%;width:2px;height:16px;background:var(--amber);transform:translate(-50%,-50%) scaleY(0);transform-origin:center;box-shadow:0 0 8px var(--amber);transition:transform .25s}
+.tlmark.on{transform:translate(-50%,-50%) scaleY(1)}
+.tllabels{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;color:var(--ink-faint);margin-top:4px}
+/* frames strip */
+.frames{display:flex;gap:8px;overflow-x:auto;padding:6px 0 10px}
+.fr{flex:0 0 auto;width:128px;opacity:0;transform:translateY(8px);transition:opacity .3s,transform .3s}
+.fr.on{opacity:1;transform:none}
+.fr .frimg{aspect-ratio:16/10;border-radius:8px;overflow:hidden;border:1px solid var(--line);background:#08060d}
+.fr .frimg svg{width:100%;height:100%;display:block}
+.fr .frt{font-family:var(--mono);font-size:10.5px;color:var(--amber);margin-top:5px;text-align:center}
+.fr .frtag{font-family:var(--mono);font-size:9px;color:var(--ink-faint);text-align:center}
+/* prompt + json */
+.panels2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+pre.code{margin:0;background:#08060d;border:1px solid var(--line);border-radius:11px;padding:15px 16px;overflow:auto;font-family:var(--mono);font-size:12.5px;line-height:1.55;color:#D7CDEC;max-height:340px;white-space:pre-wrap;word-break:break-word}
+pre.code .c{color:var(--ink-faint)} pre.code .k{color:var(--violet)} pre.code .s{color:var(--green)} pre.code .n{color:var(--amber)}
+.panelcap{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 7px}
+/* results bars */
+.bars{margin-top:6px}
+.brow{display:flex;align-items:center;gap:12px;margin:10px 0}
+.brow .bl{width:170px;font-size:14px;color:var(--ink);flex-shrink:0;display:flex;align-items:center;gap:7px}
+.brow .bl .num{font-family:var(--mono);font-size:11px;color:var(--ink-faint)}
+.btrack{flex:1;height:24px;background:var(--bg-3);border:1px solid var(--line);border-radius:6px;overflow:hidden;position:relative}
+.bfill{height:100%;width:0;border-radius:5px 0 0 5px;background:linear-gradient(90deg,var(--violet-deep),var(--violet));transition:width .6s cubic-bezier(.2,.7,.2,1)}
+.brow.best .bfill{background:linear-gradient(90deg,#9a3fd4,var(--amber))}
+.bval{width:54px;text-align:right;font-family:var(--mono);font-size:13.5px;color:var(--ink)}
+.brow.best .bval{color:var(--amber);font-weight:700}
+.brow.na .bval{color:var(--ink-faint)}
+.crown{font-size:11px;color:var(--amber);font-family:var(--mono)}
+.evi{font-size:13px;color:var(--ink-faint);margin:0 0 6px 182px;font-style:italic}
+@media (max-width:680px){.evi{margin-left:0}}
+.resnote{margin:14px 0 0;color:var(--ink-dim);font-size:14.5px}
+.resnote b{color:var(--ink)}
+
+/* ---- challenge ---- */
+.game{background:var(--bg-2);border:1px solid var(--line);border-radius:16px;padding:22px}
+.gtop{display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin-bottom:16px;font-family:var(--mono);font-size:13px}
+.gstat{color:var(--ink-dim)} .gstat b{color:var(--amber)}
+.gprompt{font-size:15px;color:var(--ink);margin:6px 0 14px}
+.gopts{display:flex;flex-wrap:wrap;gap:9px;margin-bottom:14px}
+.gopt{font-size:14px;background:var(--bg-3);border:1px solid var(--line);border-radius:9px;padding:9px 16px;color:var(--ink)}
+.gopt:hover{border-color:var(--line-strong)}
+.gopt.sel{border-color:var(--violet);box-shadow:0 0 0 1px var(--violet) inset}
+.gopt.correct{border-color:var(--green);background:rgba(121,224,168,.1)}
+.gopt.wrong{border-color:var(--red);background:rgba(255,122,138,.08)}
+.gguess{display:flex;align-items:center;gap:12px;margin-bottom:14px;color:var(--ink-dim);font-size:13px;font-family:var(--mono);flex-wrap:wrap}
+.greveal{font-size:14.5px;color:var(--ink-dim);margin-top:12px}
+
+/* ---- flashcards ---- */
+.deck{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px}
+.fcard{height:172px;perspective:1000px;background:none;border:none;padding:0;text-align:left}
+.fcinner{position:relative;width:100%;height:100%;transition:transform .55s cubic-bezier(.2,.7,.2,1);transform-style:preserve-3d}
+.fcard.flip .fcinner{transform:rotateY(180deg)}
+@media (prefers-reduced-motion:reduce){.fcinner{transition:none}}
+.fcface{position:absolute;inset:0;backface-visibility:hidden;border:1px solid var(--line);border-radius:13px;padding:16px;display:flex;flex-direction:column;background:var(--bg-3)}
+.fcfront .q{font-family:var(--display);font-size:18px;color:var(--ink);font-weight:600}
+.fcfront .hint{margin-top:auto;font-family:var(--mono);font-size:10.5px;color:var(--ink-faint);letter-spacing:.08em;text-transform:uppercase}
+.fcback{transform:rotateY(180deg);background:var(--bg-4);border-color:var(--line-strong)}
+.fcback .a{font-size:14px;color:var(--ink-dim);line-height:1.5}
+.fcback .a b{color:var(--amber)}
+.fcact{display:flex;gap:7px;margin-top:auto;padding-top:8px}
+.fcact button{flex:1;font-family:var(--mono);font-size:11px;border-radius:7px;padding:6px;border:1px solid var(--line);background:var(--bg-3);color:var(--ink-dim)}
+.fcact .got:hover{border-color:var(--green);color:var(--green)}
+.fcact .miss:hover{border-color:var(--red);color:var(--red)}
+.fcard.mastered .fcface{border-color:rgba(121,224,168,.4)}
+.fcard.mastered .fcfront::after{content:"✓";position:absolute;top:12px;right:14px;color:var(--green);font-family:var(--mono)}
+.meter{font-family:var(--mono);font-size:13px;color:var(--ink-dim);margin-top:14px}
+.meter b{color:var(--green)}
+
+/* ---- tinker ---- */
+.tcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+.tcard{text-align:left;background:var(--bg-2);border:1px solid var(--line);border-radius:13px;padding:16px;color:var(--ink-dim);transition:border-color .2s,transform .2s}
+.tcard:hover{border-color:var(--line-strong);transform:translateY(-2px)}
+.tcard .tt{font-family:var(--body);font-weight:700;color:var(--ink);font-size:15.5px;margin-bottom:5px}
+.tcard .ttag{font-family:var(--mono);font-size:10px;letter-spacing:.05em;text-transform:uppercase;padding:2px 7px;border-radius:5px;border:1px solid var(--line);display:inline-block;margin-bottom:9px}
+.tcard .ttag.real{color:var(--green);border-color:rgba(121,224,168,.3)}
+.tcard .ttag.whatif{color:var(--sky);border-color:rgba(121,199,224,.3)}
+.tcard .tw{font-size:13.5px}
+.tcard.done{border-color:rgba(242,176,94,.35)}
+.tcard.done::after{content:"ran ✓";float:right;font-family:var(--mono);font-size:10px;color:var(--amber)}
+
+/* ---- tables ---- */
+details.ref{margin:10px 0;border:1px solid var(--line);border-radius:13px;background:var(--bg-2);overflow:hidden}
+details.ref>summary{cursor:pointer;padding:16px 20px;font-family:var(--mono);font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--violet);list-style:none}
+details.ref>summary::-webkit-details-marker{display:none}
+details.ref>summary::before{content:"▸ ";color:var(--ink-faint)}
+details.ref[open]>summary::before{content:"▾ "}
+.refbody{padding:0 20px 20px}
+.tbl{width:100%;border-collapse:collapse;margin:8px 0 4px;font-size:14px}
+.tbl th{text-align:left;font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);font-weight:500;padding:10px 12px;border-bottom:1px solid var(--line-strong)}
+.tbl td{padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--ink-dim)}
+.tbl td:first-child{color:var(--ink)}
+.tbl tr:hover td{background:rgba(183,148,255,.03)}
+.tbl code{white-space:nowrap}
+.pill{font-family:var(--mono);font-size:11px;padding:2px 8px;border-radius:5px;border:1px solid var(--line)}
+.pill.you{color:var(--green);border-color:rgba(121,224,168,.3);background:rgba(121,224,168,.06)}
+.pill.op{color:var(--sky);border-color:rgba(121,199,224,.3);background:rgba(121,199,224,.06)}
+
+footer{margin-top:80px;padding-top:28px;border-top:1px solid var(--line);color:var(--ink-faint);font-size:13.5px}
+footer .files{font-family:var(--mono);font-size:12.5px;line-height:1.9;color:var(--ink-dim);margin-top:12px}
+footer .files b{color:var(--violet);font-weight:500}
+
+.js .reveal{opacity:0;transform:translateY(18px)}
+.js .reveal.in{opacity:1;transform:none;transition:opacity .7s cubic-bezier(.2,.7,.2,1),transform .7s cubic-bezier(.2,.7,.2,1)}
+@media (prefers-reduced-motion:reduce){
+  .js .reveal{opacity:1;transform:none}
+  /* catch-all: the RUN sequence toggles widths/classes via rAF; kill every transition so it snaps to final state */
+  *,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important}
+}
+
+@media (max-width:760px){
+  body{font-size:16px}
+  .wrap{padding:0 16px 90px}
+  .duo,.panels2{grid-template-columns:1fr}
+  .clipcards{grid-template-columns:1fr}
+  .brow .bl{width:120px}
+  .stg{min-width:0}
+}
+</style>
+</head>
+<body>
+<div class="grain"></div>
+
+<!-- top progress rail -->
+<div class="rail" role="region" aria-label="Progress">
+  <span class="lvl"><span class="t">LV</span> <span id="lvlNum">1</span></span>
+  <div class="xpbar" role="progressbar" aria-label="Experience" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="xpfill" id="xpfill"></div></div>
+  <div class="badges" id="badges" aria-label="Badges"></div>
+</div>
+
+<!-- control pod -->
+<div class="pod">
+  <button class="podbtn" id="sfxBtn" aria-pressed="true"><span class="sw"></span> SFX</button>
+  <button class="podbtn" id="ambBtn" aria-pressed="false"><span class="sw"></span> Ambient</button>
+  <button class="podbtn" id="resetBtn" title="Reset all progress">⟲ Reset</button>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow reveal">clipCC · Interactive · Gemma 4 E2B</div>
+    <h1 class="reveal">The <span class="accent">Gemma Lab</span><br>how a label gets its score</h1>
+    <p class="lede reveal">SigLIP2 <em>measures</em>. Gemma <em>looks and writes a number down</em>. This is a playable lab: feed it frames and labels, watch the real sampling pipeline run (with a transparent stand-in for the model’s judgement), and learn why the “best-fitted” label is just the one Gemma scores highest.</p>
+    <div class="chips reveal">
+      <span class="chip"><span class="dot"></span><b>google/gemma-4-E2B-it</b></span>
+      <span class="chip"><span class="dot amber"></span>semantics:&nbsp;<b>verbalized · uncalibrated</b></span>
+      <span class="chip"><span class="dot green"></span>runs <b>offline · zero network</b></span>
+    </div>
+    <button class="cta reveal" id="enterLab">Enter the Lab <span class="ar">→</span></button>
+  </header>
+
+  <!-- §01 -->
+  <section id="two">
+    <div class="sec-head reveal"><span class="sec-num">01</span><h2>Two very different ways to score</h2></div>
+    <p class="sec-sub reveal">Same question — “how well does this label fit?” — two machines. Knowing which page you’re on changes how you read the numbers.</p>
+    <div class="duo reveal">
+      <div class="panel cool">
+        <span class="tag">/ · the SigLIP2 page</span>
+        <h3>It measures</h3>
+        <ul>
+          <li>Encodes image and text into <b>vectors</b>, takes their similarity.</li>
+          <li>A <b>sigmoid</b> turns similarity into 0–1, <b>per label</b>.</li>
+          <li>A real, repeatable <b>computation</b> over embeddings.</li>
+          <li>Calibrated enough to compare across runs; threshold <b>0.5</b>.</li>
+        </ul>
+      </div>
+      <div class="panel warm">
+        <span class="tag">/gemma · this page</span>
+        <h3>It reads &amp; reports</h3>
+        <ul>
+          <li>Sees the <b>actual frames</b> + your labels as one prompt.</li>
+          <li><b>Generates</b> a JSON array — literally writes a number per label.</li>
+          <li>The score is a <b>verbalized self-report</b>: judgment, not arithmetic.</li>
+          <li>Uncalibrated &amp; quantized. Read it as a <b>ranking</b>, not a probability.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="note violet reveal"><span class="mk">✦</span><div>Because the score is generated text, the whole “calculation” is a <b>prompt + a decode loop + a strict parser</b>. The Lab below runs every stage of it on a real (illustrated) clip.</div></div>
+  </section>
+
+  <!-- §02 THE LAB -->
+  <section id="lab">
+    <div class="sec-head reveal"><span class="sec-num">02</span><h2>The Lab</h2></div>
+    <p class="sec-sub reveal">Pick a clip, set the labels and where the 60-second window starts, then <b>RUN</b>. The sampling math is the <em>real</em> clipCC code; the scores come from a transparent teaching stand-in (tagged below) — <b>not</b> the real model weights.</p>
+
+    <div class="lab reveal">
+      <div class="lab-controls">
+        <div class="ctl-zone zone-a">
+          <div class="zone-h"><span class="pill">you</span> Real request inputs — exactly what the API accepts</div>
+          <div class="field">
+            <label>Clip <span class="muted">(stands in for the <code>video</code> upload)</span></label>
+            <div class="clipcards" id="clipCards"></div>
+          </div>
+          <div class="field">
+            <label>Labels — <code>1–50</code>, non-empty, ≤200 chars, unique (exact string)</label>
+            <div class="chipset" id="labelChips"></div>
+            <div class="addlabel" style="margin-top:9px">
+              <input id="labelInput" type="text" placeholder="add a behavior…" maxlength="220" aria-label="New label">
+              <button id="addLabelBtn" aria-label="Add label">+</button>
+            </div>
+            <div class="err" id="labelErr" role="alert"></div>
+          </div>
+          <div class="field">
+            <label>Analysis window start — <code>0 ≤ x &lt; duration</code></label>
+            <div class="slider-row">
+              <input type="range" id="wsSlider" min="0" max="80" step="0.5" value="0" aria-label="Window start seconds">
+              <span class="sval" id="wsVal">0.0s</span>
+            </div>
+          </div>
+        </div>
+        <div class="ctl-zone zone-b">
+          <div class="zone-h"><span class="pill">operator</span> What-if knob — the API has no such field</div>
+          <div class="field">
+            <label>Frames <code>N</code> — operator env <code>gemma_max_frames</code> (default 8). Shown only to demo sampling density.</label>
+            <div class="slider-row">
+              <input type="range" id="nSlider" min="1" max="8" step="1" value="8" aria-label="Frame count (operator what-if)">
+              <span class="sval" id="nVal">8</span>
+            </div>
+            <div class="zb-note">Every real request uses the fixed effective-8. Changing this is a counterfactual, not something you can send to <code>/api/v1/gemma/label_scores</code>.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="readouts" id="readouts" aria-live="polite"></div>
+
+      <div class="runrow">
+        <button class="runbtn" id="runBtn">▶ RUN pipeline</button>
+        <button class="runbtn ghost" id="replayBtn" disabled>↻ Replay</button>
+        <span class="modetag ex" id="modeTag">illustrative example output</span>
+      </div>
+
+      <div class="stagerail" id="stageRail"></div>
+
+      <div class="timeline">
+        <div class="panelcap">Window &amp; frame timestamps on the clip</div>
+        <div class="tlbar" id="tlbar"><div class="tlwin" id="tlwin"></div></div>
+        <div class="tllabels"><span>0s</span><span id="tlEnd">—</span></div>
+      </div>
+
+      <div class="frames" id="framesStrip" aria-label="Sampled frames"></div>
+
+      <div class="panels2">
+        <div>
+          <div class="panelcap">The prompt Gemma receives</div>
+          <pre class="code" id="promptPanel"></pre>
+        </div>
+        <div>
+          <div class="panelcap">What the model writes back (greedy decode)</div>
+          <pre class="code" id="jsonPanel"></pre>
+        </div>
+      </div>
+
+      <div class="bars" id="resultBars" style="margin-top:18px"></div>
+      <p class="resnote" id="resNote"></p>
+    </div>
+  </section>
+
+  <!-- §03 CHALLENGE -->
+  <section id="challenge">
+    <div class="sec-head reveal"><span class="sec-num">03</span><h2>Challenge — call the winner</h2></div>
+    <p class="sec-sub reveal">Scores hidden. Read the frames, predict which label wins (and optionally its number). Reveal for points. Streaks compound.</p>
+    <div class="game reveal">
+      <div class="gtop">
+        <span class="gstat">points <b id="gPoints">0</b></span>
+        <span class="gstat">streak <b id="gStreak">0</b></span>
+        <span class="gstat">best <b id="gBest">0</b></span>
+        <span class="gstat">rounds <b id="gRounds">0</b></span>
+      </div>
+      <div class="frames" id="gFrames"></div>
+      <p class="gprompt" id="gPrompt"></p>
+      <div class="gopts" id="gOpts" role="group" aria-label="Predict the winning label"></div>
+      <div class="gguess">
+        <label for="gGuess">optional — your score for that label:</label>
+        <input type="range" id="gGuess" min="0" max="1" step="0.1" value="0.5" style="max-width:200px">
+        <span class="sval" id="gGuessVal">0.5</span>
+      </div>
+      <div class="runrow">
+        <button class="runbtn" id="gReveal" disabled>Reveal</button>
+        <button class="runbtn ghost" id="gNext">Next round →</button>
+      </div>
+      <div class="greveal" id="gResult" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <!-- §04 TINKER -->
+  <section id="tinker">
+    <div class="sec-head reveal"><span class="sec-num">04</span><h2>Tinker — one-tap experiments</h2></div>
+    <p class="sec-sub reveal">Each card drives the Lab and runs it, then explains what moved and why. Cards marked <i>what-if</i> touch the operator knob, not a real request input.</p>
+    <div class="tcards reveal" id="tinkerCards"></div>
+  </section>
+
+  <!-- §05 FLASHCARDS -->
+  <section id="cards">
+    <div class="sec-head reveal"><span class="sec-num">05</span><h2>Flashcards — the semantics that trip people up</h2></div>
+    <p class="sec-sub reveal">Tap to flip. Mark each once you’ve got it.</p>
+    <div class="deck reveal" id="deck"></div>
+    <div class="meter reveal">Mastered <b id="masterCount">0</b> / <span id="masterTotal">7</span></div>
+  </section>
+
+  <!-- §06 MEANING -->
+  <section id="meaning">
+    <div class="sec-head reveal"><span class="sec-num">06</span><h2>What the winning score actually means</h2></div>
+    <p class="reveal"><strong>A ranking signal, not a probability.</strong> Each behavior is rated for how strongly it’s <em>visible anywhere</em>, so the scores don’t form a distribution and won’t sum to 1. Two labels can both read 0.8; none has to. (This is <em>not</em> the same as “scored independently” — see below.)</p>
+    <p class="reveal"><strong>Quantized and uncalibrated.</strong> Generative models gravitate to round numbers — 0.0, 0.5, 0.8 — so treat values as <em>ordinal</em>: higher beats lower, but the 0.7→0.8 gap isn’t a precise 0.1 of anything. A Gemma 0.8 is <em>not</em> comparable in magnitude to a SigLIP2 0.8.</p>
+    <p class="reveal"><strong>Implicitly contrastive.</strong> The model sees every label at once in one prompt, so its scores are quietly relative to the set you submit. Change the label list and the numbers can shift. <b>Real Gemma judges the labels jointly</b> — it does not score them independently. (This site’s teaching stand-in <em>does</em> score independently, by construction; that’s the one thing it can’t imitate, and the flashcards say so.)</p>
+    <div class="disc reveal">
+      <div class="eyebrow">Score semantics — <span class="mono">gemma4_verbalized_uncalibrated</span></div>
+      Scores are verbalized self-reports from a generative model: uncalibrated, quantized to round numbers, and implicitly contrastive across labels. Treat as ordinal. NOT comparable in magnitude to SigLIP2 sigmoid scores. Not suitable for safety-critical decisions.
+    </div>
+  </section>
+
+  <!-- §07 REFERENCE -->
+  <section id="reference">
+    <div class="sec-head reveal"><span class="sec-num">07</span><h2>Reference</h2></div>
+    <p class="sec-sub reveal">The variables, the edges, and where every fact lives in the source.</p>
+
+    <details class="ref reveal">
+      <summary>Variables you can set</summary>
+      <div class="refbody">
+        <h3 style="font-size:16px;margin:14px 0 4px;color:var(--green)">Per request <span class="pill you mono">you · the route accepts these</span></h3>
+        <table class="tbl">
+          <thead><tr><th>Input</th><th>Form key</th><th>Default · limits</th><th>Effect</th></tr></thead>
+          <tbody>
+            <tr><td>Video</td><td><code>video</code></td><td>required · mp4/avi/mov/mkv</td><td>The clip to analyze.</td></tr>
+            <tr><td>Window start</td><td><code>window_start</code></td><td><code>0.0</code> · <code>ge=0</code>, must be <code>&lt; duration</code></td><td>Where the fixed 60s window begins.</td></tr>
+            <tr><td>Labels</td><td><code>labels</code> (JSON array string)</td><td><b>1–50</b> · non-empty · ≤200 chars · unique (exact)</td><td>Behaviors to score. Violations → <code>422</code>.</td></tr>
+          </tbody>
+        </table>
+        <div class="note violet" style="margin-top:10px"><span class="mk">✦</span><div><b>Not per-request:</b> frame count and window length. The route always samples <code>effective_gemma_max_frames</code> (8) over a <code>60.0s</code> window. The Lab’s <code>N</code> slider is an operator-env <i>what-if</i>, not an API field.</div></div>
+        <h3 style="font-size:16px;margin:22px 0 4px;color:var(--sky)">System config <span class="pill op mono">operator · env vars</span></h3>
+        <table class="tbl">
+          <thead><tr><th>Env var</th><th>Default</th><th>Controls</th></tr></thead>
+          <tbody>
+            <tr><td><code>gemma_analysis_window_seconds</code></td><td><code>60.0</code></td><td>Window length.</td></tr>
+            <tr><td><code>gemma_max_frames</code> / <code>_cap</code></td><td><code>8</code> / <code>16</code></td><td>Frames sampled (effective = the min).</td></tr>
+            <tr><td><code>gemma_max_labels</code></td><td><code>50</code></td><td>Hard cap on labels per request.</td></tr>
+            <tr><td><code>gemma_evidence_top_k</code></td><td><code>3</code></td><td>Top labels the prompt <i>asks</i> to justify (requested, not enforced).</td></tr>
+            <tr><td><code>gemma_image_token_budget</code></td><td><code>280</code></td><td>Reserved — not yet wired into the processor; image size bounded by the 896px ffmpeg scale.</td></tr>
+            <tr><td><code>gemma_model_id</code></td><td><code>google/gemma-4-E2B-it</code></td><td>Checkpoint the slot loads.</td></tr>
+            <tr><td><code>gemma_reserve_gb</code></td><td><code>12.0</code></td><td>Memory reserved in the residency ledger.</td></tr>
+            <tr><td><code>max_duration_seconds</code> · <code>request_timeout_seconds</code></td><td><code>300</code> · <code>300</code></td><td>Longest clip · soft request deadline.</td></tr>
+          </tbody>
+        </table>
+        <div class="note" style="margin-top:10px"><span class="mk">⚠</span><div>The label-scores token budget is derived, not user-set: <code>min(64 + 24·labels, 1280)</code> — so all 50 labels fit in one un-truncated JSON reply.</div></div>
+      </div>
+    </details>
+
+    <details class="ref reveal">
+      <summary>Good to know at the edges</summary>
+      <div class="refbody">
+        <table class="tbl">
+          <thead><tr><th>Situation</th><th>What happens</th></tr></thead>
+          <tbody>
+            <tr><td>Model omits a label id</td><td>That label’s score becomes <code>null</code> → rendered <b>n/a</b>, not zero. (The model violated “include every id exactly once”; the strict parser tolerates it.)</td></tr>
+            <tr><td>Very short window</td><td>The 0.5s spacing floor caps N below 8 — a 3s window yields <code>int(3/0.5)=6</code> frames — so you never get redundant near-identical frames.</td></tr>
+            <tr><td>Malformed JSON</td><td>Prose around the array is sliced off; a genuinely bad parse buys exactly <b>one</b> retry, then a <code>502</code>.</td></tr>
+            <tr><td>Window past clip end</td><td><code>window_start ≥ duration</code> is rejected before any work starts.</td></tr>
+            <tr><td>Slot not warmed</td><td>Scoring returns <code>503</code> (middleware pre-body gate) until <code>POST /api/v1/gemma/warm</code> finishes. Load-once, then resident.</td></tr>
+            <tr><td>Request runs long</td><td>Soft deadline checked between decode steps; <code>max_new_tokens</code> is the real bound. Response carries per-stage latency + retry count.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+
+    <footer class="reveal">
+      <div>This note is a one-read orientation, not API reference. The Lab’s sampling math (window, midpoint timestamps, N-collapse, token budget) and prompt text are ported verbatim from the source below; the <b>scores are a transparent teaching stand-in</b>, never real model weights.</div>
+      <div class="files">
+        <b>window &amp; frames</b>&nbsp;app/services/gemma_sampler.py<br>
+        <b>prompt &amp; strict parse</b>&nbsp;app/services/gemma_prompts.py<br>
+        <b>generation</b>&nbsp;app/models/gemma_vlm.py&nbsp;·&nbsp;<b>load-once slot</b>&nbsp;app/models/vlm_slot.py<br>
+        <b>routes &amp; validation</b>&nbsp;app/main.py&nbsp;·&nbsp;<b>503 gate</b>&nbsp;app/middleware.py<br>
+        <b>score semantics</b>&nbsp;app/schemas/gemma.py&nbsp;·&nbsp;<b>defaults</b>&nbsp;app/config.py
+      </div>
+    </footer>
+  </section>
+
+</div>
+
+<script>
+"use strict";
+(function(){
+// ============================================================ store
+var STORE_KEY='gemmaLab.v1';
+function defaultState(){return{xp:0,badges:{},challenge:{points:0,streak:0,bestStreak:0,rounds:0},mastery:{},audio:{sfx:true,ambient:false},tinker:{}};}
+var S=(function(){try{var r=JSON.parse(localStorage.getItem(STORE_KEY));if(r){var d=defaultState();for(var k in r)d[k]=r[k];return d;}}catch(e){}return defaultState();})();
+// coerce known sub-objects so externally-corrupted storage (e.g. {"audio":null}) can't break reads
+S.audio=Object.assign(defaultState().audio,S.audio||{});
+S.challenge=Object.assign(defaultState().challenge,S.challenge||{});
+if(!S.badges||typeof S.badges!=='object')S.badges={};
+if(!S.mastery||typeof S.mastery!=='object')S.mastery={};
+if(!S.tinker||typeof S.tinker!=='object')S.tinker={};
+function save(){try{localStorage.setItem(STORE_KEY,JSON.stringify(S));}catch(e){}}
+var RM=window.matchMedia('(prefers-reduced-motion: reduce)');
+function reduced(){return RM.matches;}
+function wait(ms){return new Promise(function(r){setTimeout(r,reduced()?0:ms);});}
+function el(id){return document.getElementById(id);}
+function esc(s){return String(s).replace(/[&<>]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;'}[c];});}
+
+// ============================================================ sampling (ports app/services/gemma_sampler.py + gemma_prompts.py)
+var WINDOW_SECONDS=60, MIN_SPACING=0.5, EFFECTIVE_FRAMES=8, MAX_LABELS=50, EVIDENCE_K=3;
+function resolveWindow(duration,ws){
+  if(ws<0) throw new Error('window_start must be >= 0.');
+  if(ws>=duration) throw new Error('window_start '+ws.toFixed(1)+'s is beyond the video duration '+duration.toFixed(1)+'s.');
+  return [ws, Math.min(duration, ws+WINDOW_SECONDS)];
+}
+function planTimestamps(a,b,nFrames){
+  if(nFrames<=0 || b-a<=0) return [];
+  var span=b-a;
+  var n=Math.min(nFrames, Math.max(1, Math.trunc(span/MIN_SPACING)));
+  var slice=span/n, out=[];
+  for(var i=0;i<n;i++) out.push(Math.round((a+(i+0.5)*slice)*1000)/1000);
+  return out;
+}
+function tokenBudget(nLabels){return Math.min(64+24*nLabels,1280);}
+function validateLabels(list){
+  if(list.length<1||list.length>MAX_LABELS) return 'Number of labels must be between 1 and '+MAX_LABELS+' (inclusive).';
+  var seen=Object.create(null);
+  for(var i=0;i<list.length;i++){var lb=list[i];
+    if(!lb.trim()) return 'Each label must be a non-empty string.';
+    if(lb.length>200) return "Label '"+lb.slice(0,50)+"...' exceeds the maximum length of 200 characters.";
+    if(seen[lb]) return "Duplicate label: '"+lb+"'.";
+    seen[lb]=1;}
+  return null;
+}
+// expose for the math review agent / console parity check
+window.GL_SAMPLING={resolveWindow:resolveWindow,planTimestamps:planTimestamps,tokenBudget:tokenBudget,validateLabels:validateLabels};
+
+// ============================================================ teaching model (transparent stand-in — NOT real weights)
+function valueAt(clip,label,t){
+  var ints=clip.behaviors[label]||[],v=0;
+  for(var i=0;i<ints.length;i++){var iv=ints[i];if(t>=iv.start&&t<=iv.end)v=Math.max(v,iv.intensity);}
+  return v;
+}
+function quantize(v){return Math.round(v*10)/10;}
+function scoreLabels(clip,timestamps,labels){
+  return labels.map(function(label){
+    var mx=0; for(var i=0;i<timestamps.length;i++) mx=Math.max(mx,valueAt(clip,label,timestamps[i]));
+    return {label:label, score:quantize(mx)};
+  });
+}
+
+// ============================================================ clips (behaviors carry a scene cue; teaching model ignores cue)
+var CLIPS=[
+  {id:'texting',name:'Texting glance',duration:90,defaultWindowStart:10,labels:['texting while driving','sleeping while driving','eating while driving'],
+   behaviors:{
+     'texting while driving':[{start:20,end:40,intensity:0.8,cue:'phone'}],
+     'sleeping while driving':[{start:50,end:52,intensity:0.1,cue:'droop'}],
+     'eating while driving':[{start:5,end:9,intensity:0.4,cue:'cup'}],
+     'hands on wheel':[{start:10,end:20,intensity:0.6,cue:'attentive'},{start:42,end:70,intensity:0.6,cue:'attentive'}]
+   },
+   evidence:{'texting while driving':'The driver holds a phone in their right hand near the wheel.','sleeping while driving':'A brief head-droop, eyes mostly open.','eating while driving':'A quick sip before the window begins.','hands on wheel':'Both hands grip the wheel outside the phone glance.'}},
+  {id:'drowsy',name:'Drowsy driver',duration:60,defaultWindowStart:0,labels:['drowsy / eyes closing','attentive','texting while driving'],
+   behaviors:{
+     'drowsy / eyes closing':[{start:33,end:39,intensity:0.8,cue:'eyesClosed'}],
+     'attentive':[{start:0,end:33,intensity:0.6,cue:'attentive'},{start:39,end:60,intensity:0.6,cue:'attentive'}],
+     'texting while driving':[]
+   },
+   evidence:{'drowsy / eyes closing':'Eyelids fall shut for several seconds around the middle of the window.','attentive':'Eyes forward, both hands on the wheel.','texting while driving':'No phone visible.'}},
+  {id:'coffee',name:'Coffee run',duration:45,defaultWindowStart:0,labels:['drinking','texting while driving','hands on wheel'],
+   behaviors:{
+     'drinking':[{start:3,end:18,intensity:0.7,cue:'cup'}],
+     'texting while driving':[{start:22,end:24,intensity:0.2,cue:'phone'}],
+     'hands on wheel':[{start:0,end:3,intensity:0.6,cue:'attentive'},{start:18,end:45,intensity:0.6,cue:'attentive'}]
+   },
+   evidence:{'drinking':'A cup is raised toward the driver’s mouth early in the window.','texting while driving':'A glance toward a phone, very brief.','hands on wheel':'Both hands return to the wheel after the drink.'}}
+];
+function activeCues(clip,t){
+  var cues={};
+  for(var label in clip.behaviors){var ints=clip.behaviors[label];for(var i=0;i<ints.length;i++){var iv=ints[i];if(t>=iv.start&&t<=iv.end&&iv.cue)cues[iv.cue]=1;}}
+  return cues;
+}
+
+// ============================================================ SVG cockpit scene (deterministic, line-art)
+function renderScene(clip,t){
+  var c=activeCues(clip,t);
+  var V='#B794FF',A='#F2B05E',D='#6E6580';
+  var headY=c.eyesClosed?54:50, tilt=c.eyesClosed?8:0;
+  var s='';
+  s+='<svg viewBox="0 0 320 200" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">';
+  s+='<rect width="320" height="200" fill="#0a0810"/>';
+  // windshield arc
+  s+='<path d="M18 150 Q160 12 302 150" fill="none" stroke="'+D+'" stroke-width="1.5" opacity="0.5"/>';
+  s+='<path d="M18 150 Q160 12 302 150" fill="rgba(121,199,224,0.04)"/>';
+  // road hint
+  s+='<path d="M120 150 L150 70 M200 150 L170 70" stroke="'+D+'" stroke-width="1" opacity="0.3"/>';
+  // dashboard
+  s+='<rect x="0" y="150" width="320" height="50" fill="#120e1c"/>';
+  s+='<rect x="0" y="148" width="320" height="3" fill="'+V+'" opacity="0.25"/>';
+  // steering wheel
+  s+='<circle cx="120" cy="172" r="34" fill="none" stroke="'+V+'" stroke-width="3" opacity="0.85"/>';
+  s+='<circle cx="120" cy="172" r="9" fill="none" stroke="'+V+'" stroke-width="2" opacity="0.7"/>';
+  s+='<line x1="120" y1="148" x2="120" y2="163" stroke="'+V+'" stroke-width="2" opacity="0.7"/>';
+  // driver torso + head
+  var hx=128;
+  s+='<g transform="rotate('+tilt+' '+hx+' '+headY+')">';
+  s+='<path d="M'+(hx-22)+' 150 Q'+hx+' 120 '+(hx+22)+' 150 Z" fill="#1a1526" stroke="'+V+'" stroke-width="1.5"/>'; // shoulders
+  s+='<circle cx="'+hx+'" cy="'+headY+'" r="20" fill="#160f22" stroke="'+V+'" stroke-width="1.8"/>'; // head
+  // eyes
+  if(c.eyesClosed){
+    s+='<path d="M'+(hx-9)+' '+(headY-2)+' q4 4 8 0" stroke="'+A+'" stroke-width="1.6" fill="none"/>';
+    s+='<path d="M'+(hx+1)+' '+(headY-2)+' q4 4 8 0" stroke="'+A+'" stroke-width="1.6" fill="none"/>';
+    s+='<text x="'+(hx+18)+'" y="'+(headY-14)+'" fill="'+A+'" font-size="11" font-family="monospace">z</text>';
+  }else{
+    s+='<circle cx="'+(hx-6)+'" cy="'+(headY-2)+'" r="2.1" fill="'+A+'"/>';
+    s+='<circle cx="'+(hx+6)+'" cy="'+(headY-2)+'" r="2.1" fill="'+A+'"/>';
+  }
+  s+='</g>';
+  // near hand / phone / cup / wheel
+  if(c.phone){
+    s+='<rect x="150" y="92" width="15" height="26" rx="3" fill="#08060d" stroke="'+A+'" stroke-width="1.8"/>';
+    s+='<rect x="152.5" y="96" width="10" height="16" fill="'+A+'" opacity="0.5"/>';
+    s+='<path d="M150 150 Q150 124 156 116" stroke="'+V+'" stroke-width="6" stroke-linecap="round" fill="none" opacity="0.8"/>'; // arm up
+    s+='<text x="172" y="100" fill="'+A+'" font-size="9" font-family="monospace">phone</text>';
+  }else if(c.cup){
+    s+='<path d="M150 88 h16 l-2 22 h-12 z" fill="#08060d" stroke="'+A+'" stroke-width="1.6"/>';
+    s+='<ellipse cx="158" cy="88" rx="8" ry="2.4" fill="none" stroke="'+A+'" stroke-width="1.4"/>';
+    s+='<path d="M152 150 Q152 120 156 110" stroke="'+V+'" stroke-width="6" stroke-linecap="round" fill="none" opacity="0.8"/>';
+  }else if(c.handsOff){
+    s+='<path d="M150 150 Q165 158 175 172" stroke="'+V+'" stroke-width="6" stroke-linecap="round" fill="none" opacity="0.6"/>';
+  }else{
+    // hand on wheel
+    s+='<circle cx="150" cy="158" r="6" fill="none" stroke="'+V+'" stroke-width="2.4" opacity="0.85"/>';
+  }
+  // timestamp stamp
+  s+='<text x="10" y="18" fill="'+D+'" font-size="11" font-family="monospace">t = '+t.toFixed(2)+'s</text>';
+  s+='</svg>';
+  return s;
+}
+
+// ============================================================ audio (WebAudio, synthesized, gesture-gated)
+var actx=null,master=null,ambientNodes=null;
+function ensureCtx(){
+  if(!actx){try{actx=new (window.AudioContext||window.webkitAudioContext)();}catch(e){return false;}master=actx.createGain();master.gain.value=0.85;master.connect(actx.destination);}
+  if(actx.state==='suspended')actx.resume();
+  return true;
+}
+function tone(freq,dur,type,gain,when){
+  if(!S.audio.sfx||!ensureCtx())return;
+  var t=actx.currentTime+(when||0),o=actx.createOscillator(),g=actx.createGain();
+  o.type=type||'sine';o.frequency.value=freq;
+  g.gain.setValueAtTime(0.0001,t);g.gain.exponentialRampToValueAtTime(gain||0.15,t+0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g).connect(master);o.start(t);o.stop(t+dur+0.03);
+}
+function sfx(name){
+  if(!S.audio.sfx)return;
+  if(name==='tick')tone(440,0.05,'square',0.06);
+  else if(name==='chord'){[330,440,554].forEach(function(f,i){tone(f,0.2,'sine',0.05,i*0.01);});}
+  else if(name==='win'){[523,659,784,1047].forEach(function(f,i){tone(f,0.28,'triangle',0.12,i*0.085);});}
+  else if(name==='miss'){tone(196,0.22,'sawtooth',0.1);tone(140,0.3,'sawtooth',0.08,0.06);}
+  else if(name==='flip')tone(620,0.06,'sine',0.05);
+  else if(name==='xp')tone(880,0.12,'sine',0.07);
+}
+function frameBlip(i){tone(300+i*55,0.09,'sine',0.08);}
+function ambientStart(){
+  if(!ensureCtx()||ambientNodes)return;
+  var g=actx.createGain();g.gain.value=0.0;
+  var lp=actx.createBiquadFilter();lp.type='lowpass';lp.frequency.value=520;
+  var o1=actx.createOscillator(),o2=actx.createOscillator(),o3=actx.createOscillator();
+  o1.type='sine';o1.frequency.value=110;o2.type='sine';o2.frequency.value=165;o2.detune.value=5;o3.type='sine';o3.frequency.value=55;
+  var lfo=actx.createOscillator(),lfg=actx.createGain();lfo.frequency.value=0.07;lfg.gain.value=0.035;
+  lfo.connect(lfg).connect(g.gain);
+  [o1,o2,o3].forEach(function(o){o.connect(lp);});lp.connect(g);g.connect(master);
+  g.gain.setValueAtTime(0,actx.currentTime);g.gain.linearRampToValueAtTime(0.09,actx.currentTime+2);
+  o1.start();o2.start();o3.start();lfo.start();
+  ambientNodes={o1:o1,o2:o2,o3:o3,lfo:lfo,g:g};
+}
+function ambientStop(){
+  if(!ambientNodes)return;var n=ambientNodes;
+  try{n.g.gain.linearRampToValueAtTime(0,actx.currentTime+0.6);}catch(e){}
+  setTimeout(function(){['o1','o2','o3','lfo'].forEach(function(k){try{n[k].stop();}catch(e){}});},700);
+  ambientNodes=null;
+}
+
+// ============================================================ gamification
+var BADGES={operator:'Operator',tinkerer:'Tinkerer',sharpshooter:'Sharpshooter',semanticist:'Semanticist'};
+var BADGE_ICON={operator:'▶',tinkerer:'⚙',sharpshooter:'◎',semanticist:'✦'};
+function renderRail(){
+  var lvl=Math.floor(S.xp/100)+1, into=S.xp%100;
+  el('lvlNum').textContent=lvl;
+  el('xpfill').style.width=into+'%';
+  el('xpfill').parentElement.setAttribute('aria-valuenow',into);
+  var b=el('badges');b.innerHTML='';
+  for(var k in BADGES){
+    var d=document.createElement('div');d.className='bpip'+(S.badges[k]?' on':'');d.textContent=BADGE_ICON[k];d.title=BADGES[k]+(S.badges[k]?' (unlocked)':' (locked)');
+    b.appendChild(d);
+  }
+}
+function addXP(n){S.xp+=n;save();renderRail();sfx('xp');}
+function unlock(b){if(!S.badges[b]){S.badges[b]=1;save();renderRail();toast('Badge unlocked — '+BADGES[b]);}}
+var toastT=null;
+function toast(msg){var t=el('toast');t.textContent=msg;t.classList.add('show');clearTimeout(toastT);toastT=setTimeout(function(){t.classList.remove('show');},2400);}
+
+// ============================================================ LAB
+var lab={clip:CLIPS[0],labels:CLIPS[0].labels.slice(),windowStart:CLIPS[0].defaultWindowStart,n:EFFECTIVE_FRAMES,running:false,lastResult:null};
+var STAGES=['Admit & guard','Window','Plan timestamps','Extract frames','Build prompt','Generate','Parse & rank'];
+
+function isDefaultRun(){
+  return lab.clip.labels.length===lab.labels.length &&
+    lab.labels.every(function(l,i){return l===lab.clip.labels[i];}) &&
+    lab.windowStart===lab.clip.defaultWindowStart && lab.n===EFFECTIVE_FRAMES;
+}
+function computeWindowSafe(){
+  try{return resolveWindow(lab.clip.duration,lab.windowStart);}catch(e){return null;}
+}
+function renderClipCards(){
+  var c=el('clipCards');c.innerHTML='';
+  CLIPS.forEach(function(clip){
+    var b=document.createElement('button');b.className='clipcard'+(clip.id===lab.clip.id?' sel':'');
+    b.setAttribute('aria-pressed',clip.id===lab.clip.id);
+    b.innerHTML='<div class="thumb">'+renderScene(clip,clip.defaultWindowStart+ (clip.duration*0.3))+'</div><div class="cn">'+esc(clip.name)+'</div><div class="cd">'+clip.duration+'s</div>';
+    b.onclick=function(){selectClip(clip);};
+    c.appendChild(b);
+  });
+}
+function selectClip(clip){
+  lab.clip=clip;lab.labels=clip.labels.slice();lab.windowStart=clip.defaultWindowStart;lab.n=EFFECTIVE_FRAMES;
+  el('wsSlider').max=Math.max(0.5,(clip.duration-0.5)).toFixed(1);
+  el('wsSlider').value=lab.windowStart;el('nSlider').value=8;
+  resetLabView();renderClipCards();renderLabels();syncControls();
+}
+function renderLabels(){
+  var c=el('labelChips');c.innerHTML='';
+  lab.labels.forEach(function(l,i){
+    var sp=document.createElement('span');sp.className='lchip';
+    sp.innerHTML='<span class="num">'+(i+1)+'</span> '+esc(l)+' <button aria-label="Remove '+esc(l)+'">×</button>';
+    sp.querySelector('button').onclick=function(){lab.labels.splice(i,1);resetLabView();renderLabels();syncControls();};
+    c.appendChild(sp);
+  });
+}
+function addLabel(){
+  var inp=el('labelInput'),v=inp.value;
+  var trial=lab.labels.concat([v]);
+  var err=validateLabels(trial);
+  // also block empty pre-trim quickly
+  if(!v.trim()){el('labelErr').textContent='Each label must be a non-empty string.';return;}
+  if(err){el('labelErr').textContent=err;return;}
+  el('labelErr').textContent='';lab.labels.push(v);inp.value='';resetLabView();renderLabels();syncControls();
+}
+function syncControls(){
+  el('wsVal').textContent=lab.windowStart.toFixed(1)+'s';
+  el('nVal').textContent=lab.n;
+  // live readouts
+  var ro=el('readouts');
+  var win=computeWindowSafe();
+  var rows=[];
+  if(win){
+    var ts=planTimestamps(win[0],win[1],lab.n);
+    rows.push(['window','['+win[0].toFixed(1)+'s , '+win[1].toFixed(1)+'s]']);
+    rows.push(['effective N','<b>'+ts.length+'</b> of '+lab.n+(lab.n!==EFFECTIVE_FRAMES?' (what-if)':'')]);
+    rows.push(['token budget','min(64+24·'+lab.labels.length+', 1280) = <b>'+tokenBudget(lab.labels.length)+'</b>']);
+    rows.push(['timestamps', ts.map(function(t){return t.toFixed(3);}).join(', ')]);
+  }else{
+    rows.push(['window','<b style="color:var(--red)">invalid — window_start ≥ duration</b>']);
+  }
+  ro.innerHTML=rows.map(function(r){return '<div class="ro"><div class="k">'+r[0]+'</div><div class="v">'+r[1]+'</div></div>';}).join('');
+  // mode tag
+  var tag=el('modeTag');
+  if(isDefaultRun()){tag.className='modetag ex';tag.textContent='illustrative example output';}
+  else{tag.className='modetag tm';tag.textContent='teaching stand-in (reactive) — not real weights';}
+  el('runBtn').disabled=!win || lab.labels.length<1 || lab.running;
+}
+function resetLabView(){
+  lab.lastResult=null;el('replayBtn').disabled=true;
+  el('framesStrip').innerHTML='';el('promptPanel').textContent='';el('jsonPanel').textContent='';
+  el('resultBars').innerHTML='';el('resNote').innerHTML='';
+  el('tlwin').style.width='0';el('tlwin').style.left='0';
+  document.querySelectorAll('#tlbar .tlmark').forEach(function(m){m.remove();});
+  renderStageRail(-1);
+}
+function renderStageRail(active){
+  var r=el('stageRail');r.innerHTML='';
+  STAGES.forEach(function(name,i){
+    var d=document.createElement('div');
+    d.className='stg'+(i<active?' done':'')+(i===active?' active':'');
+    d.innerHTML='<span class="n">'+(i+1)+'</span> '+name;
+    r.appendChild(d);
+  });
+}
+function buildPromptText(labels){
+  var numbered=labels.map(function(l,i){return (i+1)+': '+l;}).join('\n');
+  return 'You are analyzing frames sampled from a video, in chronological order.\n'+
+    'Score how strongly each numbered behavior below is visible anywhere in these frames.\n\n'+
+    'Behaviors:\n'+numbered+'\n\n'+
+    'Respond with ONLY a JSON array, no other text. One object per behavior id:\n'+
+    '[{"id": <behavior number>, "score": <number from 0.0 to 1.0>}]\n'+
+    'For the '+EVIDENCE_K+' highest-scoring behaviors only, add an "evidence" field: one short sentence describing what you saw.\n'+
+    'Scores must be JSON numbers, not strings. Include every id exactly once.';
+}
+function highlightPrompt(txt){
+  return esc(txt)
+    .replace(/^(You are analyzing.*|Score how strongly.*)$/gm,'<span class="c">$1</span>')
+    .replace(/^(\d+): /gm,'<span class="n">$1</span>: ')
+    .replace(/"(id|score|evidence)"/g,'<span class="s">"$1"</span>');
+}
+async function runLab(opts){
+  if(lab.running)return;
+  opts=opts||{};
+  var omit=(typeof opts.omit==='number')?opts.omit:undefined; // simulate a malformed reply skipping this id
+  var win=computeWindowSafe();if(!win)return;
+  lab.running=true;el('runBtn').disabled=true;el('replayBtn').disabled=true;
+  resetLabView();
+  var labels=lab.labels.slice();
+  var ts=planTimestamps(win[0],win[1],lab.n);
+  var dur=lab.clip.duration;
+  // stage 1
+  renderStageRail(0);sfx('tick');await wait(420);
+  // stage 2 window
+  renderStageRail(1);
+  el('tlEnd').textContent=dur+'s';
+  el('tlwin').style.left=((win[0]/dur)*100)+'%';el('tlwin').style.width=(((win[1]-win[0])/dur)*100)+'%';
+  sfx('tick');await wait(560);
+  // stage 3 plan timestamps -> markers
+  renderStageRail(2);
+  var bar=el('tlbar');
+  for(var i=0;i<ts.length;i++){
+    var m=document.createElement('div');m.className='tlmark';m.style.left=((ts[i]/dur)*100)+'%';bar.appendChild(m);
+    (function(mm){requestAnimationFrame(function(){mm.classList.add('on');});})(m);
+    frameBlip(i);await wait(110);
+  }
+  await wait(250);
+  // stage 4 extract frames
+  renderStageRail(3);
+  var strip=el('framesStrip');
+  for(var j=0;j<ts.length;j++){
+    var fr=document.createElement('div');fr.className='fr';
+    fr.innerHTML='<div class="frimg">'+renderScene(lab.clip,ts[j])+'</div><div class="frt">'+ts[j].toFixed(3)+'s</div><div class="frtag">≤896px · q2</div>';
+    strip.appendChild(fr);
+    (function(ff){requestAnimationFrame(function(){ff.classList.add('on');});})(fr);
+    frameBlip(j);await wait(130);
+  }
+  await wait(250);
+  // stage 5 prompt
+  renderStageRail(4);
+  el('promptPanel').innerHTML=highlightPrompt(buildPromptText(labels));
+  sfx('tick');await wait(620);
+  // stage 6 generate -> stream json (skip the omitted id if simulating a malformed reply)
+  renderStageRail(5);
+  var scored=scoreLabels(lab.clip,ts,labels);
+  var order=scored.map(function(o,i){return {i:i,score:o.score};}).sort(function(a,b){return b.score-a.score;});
+  var topIdx={};order.filter(function(o){return o.i!==omit;}).slice(0,EVIDENCE_K).forEach(function(o){topIdx[o.i]=1;});
+  var emit=[];scored.forEach(function(o,q){if(q!==omit)emit.push(q);});
+  var jp=el('jsonPanel'),lines=['['];
+  for(var e=0;e<emit.length;e++){
+    var q=emit[e],ev=(topIdx[q]&&lab.clip.evidence[scored[q].label])?lab.clip.evidence[scored[q].label]:null;
+    lines.push(' {<span class="s">"id"</span>: <span class="n">'+(q+1)+'</span>, <span class="s">"score"</span>: <span class="n">'+scored[q].score.toFixed(1)+'</span>'+
+      (ev?', <span class="s">"evidence"</span>: <span class="s">"'+esc(ev)+'"</span>':'')+'}'+(e<emit.length-1?',':''));
+    jp.innerHTML=lines.join('\n')+'\n]';
+    sfx('chord');await wait(260);
+  }
+  if(omit!==undefined)lines.push('<span class="c">  // id '+(omit+1)+' never appears — the model skipped it (violates "include every id exactly once")</span>');
+  jp.innerHTML=lines.join('\n')+'\n]';
+  await wait(200);
+  // stage 7 parse & rank
+  renderStageRail(6);
+  renderResults(scored,labels,omit);
+  renderStageRail(7);
+  sfx('win');unlock('operator');addXP(12);
+  lab.lastResult={scored:scored,labels:labels};
+  lab.running=false;el('replayBtn').disabled=false;syncControls();
+  if(omit!==undefined){var mt=el('modeTag');mt.className='modetag tm';mt.textContent='malformed-reply simulation — parser tolerance demo';}
+}
+function renderResults(scored,labels,omitIdx){
+  var bars=el('resultBars');bars.innerHTML='';
+  var bestI=-1,best=-1;
+  scored.forEach(function(o,i){if(omitIdx!==i && o.score>best){best=o.score;bestI=i;}});
+  if(bestI<0){el('resNote').textContent='';return;} // no scorable label (all omitted/empty)
+  var order=scored.map(function(o,i){return i;}).sort(function(a,b){
+    var sa=(omitIdx===a)?-1:scored[a].score, sb=(omitIdx===b)?-1:scored[b].score;return sb-sa;});
+  order.forEach(function(i){
+    var o=scored[i],na=(omitIdx===i);
+    var row=document.createElement('div');row.className='brow'+(i===bestI?' best':'')+(na?' na':'');
+    var pct=na?0:(o.score*100);
+    row.innerHTML='<div class="bl"><span class="num">#'+(i+1)+'</span> '+esc(o.label)+(i===bestI?' <span class="crown">◆ best</span>':'')+'</div>'+
+      '<div class="btrack"><div class="bfill" style="width:0"></div></div>'+
+      '<div class="bval">'+(na?'n/a':o.score.toFixed(2))+'</div>';
+    bars.appendChild(row);
+    (function(rw,p){requestAnimationFrame(function(){rw.querySelector('.bfill').style.width=p+'%';});})(row,pct);
+    var ev=lab.clip.evidence[o.label];
+    if(i===bestI && ev && !na){var pe=document.createElement('p');pe.className='evi';pe.textContent='“'+ev+'”';bars.appendChild(pe);}
+  });
+  var sum=scored.reduce(function(a,o,i){return a+((omitIdx===i)?0:o.score);},0);
+  var note='<b>Best-fitted label = “'+esc(scored[bestI].label)+'”</b> — the largest generated score. Scores total '+sum.toFixed(1)+', not 1.0: they’re not a normalized distribution, and real Gemma judges all labels jointly (implicitly contrastive).';
+  if(omitIdx!==undefined)note+=' <b style="color:var(--red)">The model skipped id #'+(omitIdx+1)+'</b> — it violated “include every id exactly once,” so the strict parser renders that label <b>n/a</b>, not 0.';
+  el('resNote').innerHTML=note;
+}
+
+// ============================================================ CHALLENGE
+var chal={clip:null,labels:null,ts:null,scored:null,winnerIdx:-1,pick:-1,revealed:false,seed:1};
+function chalNext(){
+  chal.seed++;
+  // clip cycles fast, window cycles slow -> 9 distinct boards before repeating (not locked together)
+  var ci=chal.seed%CLIPS.length;
+  var clip=CLIPS[ci];
+  var ws=[0, clip.defaultWindowStart, Math.min(clip.duration-0.5, clip.defaultWindowStart+18)][Math.floor(chal.seed/CLIPS.length)%3];
+  var win=resolveWindow(clip.duration,Math.min(ws,clip.duration-0.5));
+  var ts=planTimestamps(win[0],win[1],EFFECTIVE_FRAMES);
+  var labels=clip.labels.slice();
+  var scored=scoreLabels(clip,ts,labels);
+  var wi=0;for(var i=1;i<scored.length;i++)if(scored[i].score>scored[wi].score)wi=i;
+  chal.clip=clip;chal.labels=labels;chal.ts=ts;chal.scored=scored;chal.winnerIdx=wi;chal.pick=-1;chal.revealed=false;
+  // frames
+  var gf=el('gFrames');gf.innerHTML='';
+  ts.forEach(function(t){var fr=document.createElement('div');fr.className='fr on';fr.innerHTML='<div class="frimg">'+renderScene(clip,t)+'</div><div class="frt">'+t.toFixed(2)+'s</div>';gf.appendChild(fr);});
+  el('gPrompt').innerHTML='Clip <b>'+esc(clip.name)+'</b>, window ['+win[0].toFixed(0)+'s, '+win[1].toFixed(0)+'s], '+ts.length+' frames. Which label scores highest?';
+  var go=el('gOpts');go.innerHTML='';go.style.pointerEvents='';
+  labels.forEach(function(l,i){var b=document.createElement('button');b.className='gopt';b.textContent=l;b.onclick=function(){chal.pick=i;[].forEach.call(go.children,function(c,ci){c.classList.toggle('sel',ci===i);});el('gReveal').disabled=false;};go.appendChild(b);});
+  el('gReveal').disabled=true;el('gResult').textContent='';
+  syncChalStats();
+}
+function chalReveal(){
+  if(chal.revealed||chal.pick<0)return;chal.revealed=true;
+  var go=el('gOpts');
+  [].forEach.call(go.children,function(c,ci){
+    if(ci===chal.winnerIdx){c.classList.add('correct');c.textContent='✓ '+c.textContent;}
+    if(ci===chal.pick&&ci!==chal.winnerIdx){c.classList.add('wrong');c.textContent='✗ '+c.textContent;}
+  });
+  go.style.pointerEvents='none'; // lock choices once revealed
+  var correct=(chal.pick===chal.winnerIdx);
+  var pts=0,msg='';
+  S.challenge.rounds++;
+  if(correct){
+    pts+=50;
+    var guess=parseFloat(el('gGuess').value),actual=chal.scored[chal.winnerIdx].score;
+    var prox=Math.round(50*(1-Math.abs(guess-actual)));pts+=Math.max(0,prox);
+    S.challenge.streak++;if(S.challenge.streak>S.challenge.bestStreak)S.challenge.bestStreak=S.challenge.streak;
+    if(S.challenge.streak>=3)unlock('sharpshooter');
+    var mult=1+Math.min(S.challenge.streak-1,4)*0.25;pts=Math.round(pts*mult);
+    msg='✓ Correct — “'+esc(chal.scored[chal.winnerIdx].label)+'” at '+actual.toFixed(1)+'. +'+pts+' pts (streak ×'+S.challenge.streak+', proximity '+Math.max(0,prox)+').';
+    sfx('win');addXP(8);
+  }else{
+    S.challenge.streak=0;
+    msg='✗ It was “'+esc(chal.scored[chal.winnerIdx].label)+'” ('+chal.scored[chal.winnerIdx].score.toFixed(1)+'). Full ranking: '+
+      chal.scored.slice().sort(function(a,b){return b.score-a.score;}).map(function(o){return esc(o.label)+' '+o.score.toFixed(1);}).join(' · ');
+    sfx('miss');
+  }
+  S.challenge.points+=pts;save();
+  el('gResult').innerHTML=msg;
+  syncChalStats();
+}
+function syncChalStats(){el('gPoints').textContent=S.challenge.points;el('gStreak').textContent=S.challenge.streak;el('gBest').textContent=S.challenge.bestStreak;el('gRounds').textContent=S.challenge.rounds;}
+
+// ============================================================ TINKER
+var TINKER=[
+  {id:'slide',title:'Slide past the phone',tag:'real',klass:'real',w:'window_start moves after the texting interval — texting collapses (the window is bounded).',
+   apply:function(){selectClip(CLIPS[0]);lab.windowStart=42;el('wsSlider').value=42;}},
+  {id:'starve',title:'Starve the sampler',tag:'what-if',klass:'whatif',w:'N=2 on the drowsy clip — the brief nod-off falls between the two samples and is missed entirely (→ 0). The API always uses the fixed effective-8.',
+   apply:function(){selectClip(CLIPS[1]);lab.n=2;el('nSlider').value=2;}},
+  {id:'contrast',title:'The contrastive catch',tag:'real',klass:'real',w:'Add a 4th label — the stand-in’s other scores DON’T move (it scores each label independently). Real Gemma’s would shift, because it judges all labels in one prompt. The one effect the stand-in can’t fake.',
+   apply:function(){selectClip(CLIPS[0]);lab.labels=CLIPS[0].labels.concat(['hands on wheel']);}},
+  {id:'tiny',title:'Tiny window',tag:'real',klass:'real',w:'window_start near the end → a 3s span → effective N collapses below 8 via the 0.5s floor: int(3/0.5)=6 frames.',
+   apply:function(){selectClip(CLIPS[0]);lab.windowStart=87;el('wsSlider').value=87;}},
+  {id:'omit',title:'Edge case: model skips an id',tag:'what-if',klass:'whatif',w:'Simulate a MALFORMED reply that omits one id — the strict parser keeps the rest and renders the missing label n/a (not 0). This is parser tolerance, not normal clip behavior.',
+   special:'omit'}
+];
+function renderTinker(){
+  var c=el('tinkerCards');c.innerHTML='';
+  TINKER.forEach(function(t){
+    var b=document.createElement('button');b.className='tcard'+(S.tinker[t.id]?' done':'');
+    b.innerHTML='<div class="tt">'+esc(t.title)+'</div><span class="ttag '+t.klass+'">'+t.tag+'</span><div class="tw">'+esc(t.w)+'</div>';
+    b.onclick=function(){runTinker(t);};
+    c.appendChild(b);
+  });
+}
+async function runTinker(t){
+  if(lab.running)return;
+  el('lab').scrollIntoView({behavior:reduced()?'auto':'smooth',block:'start'});
+  if(t.special==='omit'){
+    selectClip(CLIPS[2]);renderLabels();syncControls();
+    await wait(400);await runLab({omit:1}); // simulate the model skipping id #2 (parser tolerance demo)
+  }else{
+    t.apply();renderClipCards();renderLabels();syncControls();
+    await wait(400);await runLab();
+  }
+  if(!S.tinker[t.id]){S.tinker[t.id]=1;save();addXP(6);}
+  renderTinker();
+  if(TINKER.every(function(x){return S.tinker[x.id];}))unlock('tinkerer');
+  toast('Experiment: '+t.title);
+}
+
+// ============================================================ FLASHCARDS
+var CARDS=[
+  {id:'sum',q:'Do Gemma scores sum to 1?',a:'<b>No</b> — they’re not a normalized distribution. And note: not because labels are scored independently. Real Gemma is <b>implicitly contrastive</b>, judging them jointly. “Independent” describes only this site’s teaching stand-in.'},
+  {id:'prob',q:'Probability, or ranking?',a:'<b>Ordinal ranking.</b> Higher beats lower, but the gap between 0.7 and 0.8 isn’t a precise 0.1 of anything.'},
+  {id:'cross',q:'Is a Gemma 0.8 the same as a SigLIP2 0.8?',a:'<b>No.</b> Different machinery — verbalized self-report vs. embedding sigmoid. Not magnitude-comparable.'},
+  {id:'round',q:'Why the round numbers?',a:'<b>Generative quantization.</b> The model gravitates to 0.0, 0.5, 0.8… Treat the value as ordinal.'},
+  {id:'contrast',q:'Contrastive or not?',a:'<b>Yes</b> — all labels share one prompt, so scores are quietly relative to the set. Change the list, the numbers can move.'},
+  {id:'missing',q:'Missing label → 0 or n/a?',a:'<b>n/a</b> (<code>null</code>), not zero. A missing id means the model skipped it; the parser tolerates it.'},
+  {id:'timeout',q:'What does the timeout do?',a:'<b>Soft</b> — checked between decode steps. <code>max_new_tokens</code> is the real bound on the reply.'}
+];
+function renderDeck(){
+  var d=el('deck');d.innerHTML='';el('masterTotal').textContent=CARDS.length;
+  CARDS.forEach(function(c){
+    var card=document.createElement('div');card.className='fcard'+(S.mastery[c.id]?' mastered':'');card.setAttribute('role','group');
+    card.innerHTML='<div class="fcinner">'+
+      '<div class="fcface fcfront" tabindex="0" role="button" aria-label="Flip card: '+esc(c.q)+'"><div class="q">'+esc(c.q)+'</div><div class="hint">tap / Enter to flip</div></div>'+
+      '<div class="fcface fcback"><div class="a">'+c.a+'</div><div class="fcact"><button class="got">✓ got it</button><button class="miss">↻ again</button></div></div>'+
+      '</div>';
+    var front=card.querySelector('.fcfront');
+    var flip=function(){card.classList.add('flip');sfx('flip');var g=card.querySelector('.got');if(g)g.focus();};
+    front.onclick=flip;
+    front.onkeydown=function(e){if(e.key==='Enter'||e.key===' '){e.preventDefault();flip();}};
+    card.querySelector('.got').onclick=function(e){e.stopPropagation();if(!S.mastery[c.id]){S.mastery[c.id]=1;save();addXP(5);}card.classList.add('mastered');card.classList.remove('flip');syncMaster();if(CARDS.every(function(x){return S.mastery[x.id];}))unlock('semanticist');};
+    card.querySelector('.miss').onclick=function(e){e.stopPropagation();card.classList.remove('flip');};
+    d.appendChild(card);
+  });
+  syncMaster();
+}
+function syncMaster(){var n=0;CARDS.forEach(function(c){if(S.mastery[c.id])n++;});el('masterCount').textContent=n;}
+
+// ============================================================ wiring
+function setSfx(on){S.audio.sfx=on;save();el('sfxBtn').classList.toggle('on',on);el('sfxBtn').setAttribute('aria-pressed',on);if(on){ensureCtx();sfx('tick');}}
+function setAmbient(on){S.audio.ambient=on;save();el('ambBtn').classList.toggle('on',on);el('ambBtn').setAttribute('aria-pressed',on);if(on)ambientStart();else ambientStop();}
+
+function init(){
+  renderRail();
+  // pod
+  el('sfxBtn').classList.toggle('on',S.audio.sfx);el('sfxBtn').setAttribute('aria-pressed',S.audio.sfx);
+  el('ambBtn').classList.toggle('on',S.audio.ambient);el('ambBtn').setAttribute('aria-pressed',S.audio.ambient);
+  el('sfxBtn').onclick=function(){setSfx(!S.audio.sfx);};
+  el('ambBtn').onclick=function(){setAmbient(!S.audio.ambient);};
+  el('resetBtn').onclick=function(){if(confirm('Reset all XP, badges, challenge scores and flashcard progress?')){S=defaultState();save();location.reload();}};
+  // ambient resumes on first gesture if it was on
+  var resumed=false;
+  function firstGesture(){if(resumed)return;resumed=true;ensureCtx();if(S.audio.ambient)ambientStart();window.removeEventListener('pointerdown',firstGesture);window.removeEventListener('keydown',firstGesture);}
+  window.addEventListener('pointerdown',firstGesture);window.addEventListener('keydown',firstGesture);
+
+  el('enterLab').onclick=function(){el('lab').scrollIntoView({behavior:reduced()?'auto':'smooth'});};
+
+  // lab
+  el('wsSlider').max=Math.max(0.5,(lab.clip.duration-0.5)).toFixed(1);
+  renderClipCards();renderLabels();renderStageRail(-1);syncControls();
+  el('wsSlider').oninput=function(){lab.windowStart=parseFloat(this.value);resetLabView();syncControls();};
+  el('nSlider').oninput=function(){lab.n=parseInt(this.value,10);resetLabView();syncControls();};
+  el('addLabelBtn').onclick=addLabel;
+  el('labelInput').onkeydown=function(e){if(e.key==='Enter'){e.preventDefault();addLabel();}};
+  el('labelInput').oninput=function(){el('labelErr').textContent='';};
+  el('runBtn').onclick=function(){runLab();};
+  el('replayBtn').onclick=function(){runLab();};
+
+  // challenge
+  el('gGuess').oninput=function(){el('gGuessVal').textContent=parseFloat(this.value).toFixed(1);};
+  el('gReveal').onclick=chalReveal;el('gNext').onclick=chalNext;chalNext();
+
+  // tinker + cards
+  renderTinker();renderDeck();
+
+  // reveal observer
+  if('IntersectionObserver' in window){
+    var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});},{rootMargin:'0px 0px -8% 0px',threshold:.06});
+    document.querySelectorAll('.reveal').forEach(function(elm,i){if(i<6)elm.style.transitionDelay=(i*60)+'ms';io.observe(elm);});
+  }else{document.querySelectorAll('.reveal').forEach(function(e){e.classList.add('in');});}
+
+  // console parity check (math review aid) — worked example
+  try{
+    var w=resolveWindow(90,10),t=planTimestamps(w[0],w[1],8);
+    console.assert(t.join(',')==='13.75,21.25,28.75,36.25,43.75,51.25,58.75,66.25','timestamp parity');
+    console.assert(tokenBudget(3)===136 && tokenBudget(50)===1264,'budget parity');
+    console.assert(planTimestamps(87,90,8).length===6,'N-collapse parity');
+  }catch(e){}
+}
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
+})();
+</script>
+</body>
+</html>

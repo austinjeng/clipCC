@@ -10,6 +10,18 @@ from app.resource_gates import ResourceGates
 # Type alias for ASGI app callable
 ASGIApp = Callable
 
+# Route policy (spec §7): video-upload POST routes get the full gate stack;
+# status/warm are auth-only; the /gemma page passes through like /.
+GEMMA_UPLOAD_PATHS = frozenset({
+    "/api/v1/gemma/label_scores",
+    "/api/v1/gemma/qa",
+    "/api/v1/gemma/events",
+})
+GEMMA_AUTH_ONLY_PATHS = frozenset({
+    "/api/v1/gemma/status",
+    "/api/v1/gemma/warm",
+})
+
 
 class _BodyTooLargeSignal(Exception):
     pass
@@ -55,16 +67,22 @@ class RequestGateMiddleware:
         gates: ResourceGates,
         api_key: str | None,
         max_body_bytes: int,
+        vlm_state: Callable | None = None,
     ) -> None:
         self._app = app
         self._gates = gates
         self._api_key = api_key
         self._max_body_bytes = max_body_bytes
+        self._vlm_state = vlm_state
 
     def _check_auth(self, scope: dict) -> bool:
         """Return True if auth passes (key not configured or key matches)."""
         if self._api_key is None:
             return True
+        if not self._api_key.strip():
+            # A blank/whitespace key is a misconfiguration: never authenticate
+            # with it (prevents an empty X-API-Key header from matching b"").
+            return False
         expected = self._api_key.encode()
         headers: list[tuple[bytes, bytes]] = scope.get("headers", [])
         for name, value in headers:
@@ -99,8 +117,12 @@ class RequestGateMiddleware:
             await self._app(scope, receive, send)
             return
 
-        # /api/v1/classify: auth → upload concurrency → body size
-        if path == "/api/v1/classify":
+        # /api/v1/classify + Gemma upload routes: auth → [slot-state gate] → upload concurrency → body size
+        # /api/v1/hybrid runs SigLIP2 then Gemma — gate it like a VLM upload route
+        # (it needs Gemma loaded before we drain a 500MB body).
+        is_vlm_upload = path in GEMMA_UPLOAD_PATHS or path == "/api/v1/hybrid"
+
+        if path == "/api/v1/classify" or is_vlm_upload:
             if not self._check_auth(scope):
                 await _send_json_response(
                     send,
@@ -108,6 +130,28 @@ class RequestGateMiddleware:
                     {"detail": "Invalid or missing API key. Provide a valid key in the X-API-Key header."},
                 )
                 return
+
+            if is_vlm_upload:
+                state = self._vlm_state() if self._vlm_state is not None else "idle"
+                if state != "loaded":
+                    # Fail fast BEFORE draining the multipart body: a cold
+                    # request must not stream 500MB while no model can serve it.
+                    payload = json.dumps({
+                        "detail": f"Gemma model is not loaded (state: {state}). "
+                                  f"Trigger loading via POST /api/v1/gemma/warm and poll "
+                                  f"GET /api/v1/gemma/status."
+                    }).encode()
+                    await send({
+                        "type": "http.response.start",
+                        "status": 503,
+                        "headers": [
+                            (b"content-type", b"application/json"),
+                            (b"content-length", str(len(payload)).encode()),
+                            (b"retry-after", b"10"),
+                        ],
+                    })
+                    await send({"type": "http.response.body", "body": payload, "more_body": False})
+                    return
 
             try:
                 async with self._gates.upload_admission():
@@ -138,17 +182,26 @@ class RequestGateMiddleware:
                     try:
                         await self._app(scope, guarded_receive, intercepting_send)
                     except _BodyTooLargeSignal:
-                        if not response_started:
-                            max_mb = self._max_body_bytes / (1024 * 1024)
-                            await _send_json_response(
-                                send,
-                                413,
-                                {
-                                    "detail": (
-                                        f"Request body exceeds the maximum allowed size of {max_mb:.1f} MB."
-                                    )
-                                },
-                            )
+                        # Some app stacks let the signal propagate out; others
+                        # (FastAPI multipart form parsing) catch it internally and
+                        # convert it into their own response, which intercepting_send
+                        # suppresses. Either way the 413 is emitted below.
+                        pass
+
+                    # Emit the 413 whether the signal propagated out or was
+                    # swallowed inside the app — as long as no real response has
+                    # already been flushed to the client.
+                    if captured_signal and not response_started:
+                        max_mb = self._max_body_bytes / (1024 * 1024)
+                        await _send_json_response(
+                            send,
+                            413,
+                            {
+                                "detail": (
+                                    f"Request body exceeds the maximum allowed size of {max_mb:.1f} MB."
+                                )
+                            },
+                        )
             except UploadConcurrencyError:
                 await _send_json_response(
                     send,
@@ -159,6 +212,18 @@ class RequestGateMiddleware:
 
         # /api/v1/models*: auth required, no body size or concurrency gates
         if path.startswith("/api/v1/models"):
+            if not self._check_auth(scope):
+                await _send_json_response(
+                    send,
+                    401,
+                    {"detail": "Invalid or missing API key. Provide a valid key in the X-API-Key header."},
+                )
+                return
+            await self._app(scope, receive, send)
+            return
+
+        # Gemma status/warm: auth only — must NOT consume upload slots or body plumbing
+        if path in GEMMA_AUTH_ONLY_PATHS:
             if not self._check_auth(scope):
                 await _send_json_response(
                     send,

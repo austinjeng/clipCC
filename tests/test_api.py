@@ -104,6 +104,64 @@ async def test_missing_video(client):
 
 
 @pytest.mark.anyio
+async def test_validation_error_detail_is_flattened_string(client, small_video):
+    # A Form-constraint violation raises FastAPI's RequestValidationError, whose
+    # default detail is a list of objects. The app must flatten it to the
+    # {"detail": "<string>"} shape every other error uses.
+    r = await client.post(
+        "/api/v1/classify",
+        files={"video": ("test.mp4", small_video.read_bytes(), "video/mp4")},
+        data={"labels": json.dumps(["a", "b", "c"]), "gap_tolerance": "99"},  # le=10.0
+    )
+    assert r.status_code == 422
+    detail = r.json()["detail"]
+    assert isinstance(detail, str)
+    assert "gap_tolerance" in detail
+
+
+@pytest.mark.anyio
+async def test_missing_video_detail_is_string(client):
+    # Missing required parts also go through RequestValidationError → string shape.
+    r = await client.post("/api/v1/classify", data={"labels": json.dumps(["a", "b", "c"])})
+    assert r.status_code == 422
+    assert isinstance(r.json()["detail"], str)
+
+
+@pytest.mark.anyio
+async def test_threshold_rejected_for_mean_aggregation(client, small_video):
+    # threshold is only valid with aggregation='temporal'. For mean it must be
+    # rejected (422), not silently dropped and the request run anyway.
+    r = await client.post(
+        "/api/v1/classify",
+        files={"video": ("test.mp4", small_video.read_bytes(), "video/mp4")},
+        data={"labels": json.dumps(["a", "b", "c"]), "aggregation": "mean", "threshold": "0.8"},
+    )
+    assert r.status_code == 422
+    assert "threshold" in r.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_threshold_rejected_for_max_aggregation(client, small_video):
+    r = await client.post(
+        "/api/v1/classify",
+        files={"video": ("test.mp4", small_video.read_bytes(), "video/mp4")},
+        data={"labels": json.dumps(["a", "b", "c"]), "aggregation": "max", "threshold": "0.5"},
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_threshold_accepted_for_temporal_aggregation(client, small_video):
+    # Sanity: threshold is still accepted with aggregation='temporal' (no regression).
+    r = await client.post(
+        "/api/v1/classify",
+        files={"video": ("test.mp4", small_video.read_bytes(), "video/mp4")},
+        data={"labels": json.dumps(["a", "b", "c"]), "aggregation": "temporal", "threshold": "0.5"},
+    )
+    assert r.status_code == 200
+
+
+@pytest.mark.anyio
 async def test_label_defaults(client):
     r = await client.get("/api/v1/labels/defaults")
     assert r.status_code == 200

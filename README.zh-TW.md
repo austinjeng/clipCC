@@ -14,6 +14,8 @@
 - **內建網頁 UI** — 開啟 `http://localhost:8000/` 即可使用模型選擇器、影片上傳、標籤輸入和結果視覺化。
 - **三種聚合模式** — `mean`（跨影格平均）、`max`（每標籤峰值含時間戳記）、`temporal`（逐影格時間軸搭配片段偵測）。
 - **Sigmoid 評分** — 每個標籤獨立取得 0 到 1 之間的信心分數。多個標籤可同時獲得高分。
+- **Gemma 4 E2B 探索**（選用，偏向 GPU）— 用視覺語言模型在抽樣影格上做開放式問答與標籤評分，位於 `/gemma` 頁面。隨需載入，CPU 上預設關閉。
+- **混合模式**（選用）— 先用 SigLIP2 為每個影格評分，再讓 Gemma 4 驗證分數最高的標籤，位於 `/hybrid` 頁面。
 - **輕量化 Docker 映像** — 基礎映像約 1 GB。模型按需下載並快取於 Docker 磁碟區。
 - **GPU 支援** — NVIDIA CUDA 加速（比 CPU 快 10-30 倍）。
 - **預設拒絕的身份驗證** — 必須設定 API 金鑰或明確停用驗證。
@@ -35,6 +37,7 @@
   - [GET /api/v1/models/active](#get-apiv1modelsactive)
   - [GET /live](#get-live)
   - [GET /ready](#get-ready)
+  - [Gemma 4 與混合模式](#gemma-4-與混合模式)
 - [組態設定](#組態設定)
 - [身份驗證](#身份驗證)
 - [GPU 支援](#gpu-支援)
@@ -215,6 +218,8 @@ docker compose --profile cpu down
 ## 網頁 UI
 
 ClipCC 包含內建網頁介面，位於 **http://localhost:8000/**。網頁 UI 為選用功能，所有功能均可透過 API 使用。
+
+頂部導覽列另有兩個選用的探索頁面：**`/gemma`**（Gemma 4 問答與標籤評分）和 **`/hybrid`**（SigLIP2 → Gemma 驗證）。兩者都需要 Gemma 插槽 — 先設定 `GEMMA_ENABLED=true`（建議用 GPU）並完成預熱。詳見 [Gemma 4 與混合模式](#gemma-4-與混合模式)。
 
 ### 介面功能
 
@@ -586,6 +591,59 @@ curl http://localhost:8000/api/v1/models/active
 
 ---
 
+### Gemma 4 與混合模式
+
+> **選用功能，CPU 上預設關閉。** Gemma 4 E2B 視覺語言模型只在預熱時才載入（啟動時不會載入），且很吃記憶體：GPU 上 bf16 約需 11.4 GB 顯存，CPU 上 fp32 約需 22 GB 記憶體（僅供示範）。CPU 的 Docker 設定檔已將其停用；在 GPU 主機上以 `GEMMA_ENABLED=true` 啟用，再呼叫 `/api/v1/gemma/warm`。網頁頁面：`/gemma` 與 `/hybrid`。
+
+#### GET /api/v1/gemma/status
+
+插槽生命週期與能力資訊 — `enabled`、`state`（`unloaded` / `loading` / `loaded` / `error`）、`device`，以及目前的 `model_id`。
+
+```bash
+curl http://localhost:8000/api/v1/gemma/status
+```
+
+#### POST /api/v1/gemma/warm
+
+觸發一次性的模型載入。回傳 `202` 與新狀態；記憶體不足時回傳 `503`；已在載入中則回傳 `409`。在插槽變成 `loaded` 之前，Gemma 與混合模式的請求都會回傳 `503`。
+
+```bash
+curl -X POST http://localhost:8000/api/v1/gemma/warm
+```
+
+#### POST /api/v1/gemma/label_scores
+
+用 Gemma 對分析視窗內抽樣的影格進行標籤評分（multipart form）。
+
+| 欄位 | 必填 | 說明 |
+|---|---|---|
+| `video` | 是 | 影片檔案 |
+| `labels` | 是 | 標籤字串的 JSON 陣列（上限為 `GEMMA_MAX_LABELS`） |
+| `window_start` | 否 | 分析視窗的起始秒數（預設 `0`） |
+| `instruction` | 否 | 附加在提示前的額外指令（≤2000 字元） |
+| `max_frames` | 否 | 抽樣影格數，限制在 `[1, GEMMA_MAX_FRAMES_CAP]` |
+
+#### POST /api/v1/gemma/qa
+
+對抽樣影格做開放式問答（multipart form）：`video`、`prompt`（必填，≤2000 字元），以及選填的 `window_start` 與 `max_frames`。
+
+#### POST /api/v1/hybrid
+
+兩階段管線：SigLIP2 為每個影格評分，再由 Gemma 4 驗證分數最高的標籤（multipart form）。
+
+| 欄位 | 必填 | 說明 |
+|---|---|---|
+| `video` | 是 | 影片檔案 |
+| `labels` | 是 | 標籤字串的 JSON 陣列 |
+| `fps` | 否 | SigLIP2 取樣率，`0.1`–`5.0`（預設 `1.0`） |
+| `aggregation` | 否 | `max` 或 `mean`（預設 `max`） |
+| `threshold` | 否 | 分數門檻 `0`–`1`（預設 `0.5`） |
+| `top_k` | 否 | 傳給 Gemma 的 SigLIP2 高分標籤數，`1`–`GEMMA_MAX_FRAMES_CAP`（預設 `3`） |
+| `max_verified_labels` | 否 | Gemma 驗證標籤數的上限（預設 `HYBRID_MAX_VERIFIED_LABELS`） |
+| `instruction` | 否 | Gemma 驗證提示的額外指令 |
+
+---
+
 ### GET /live
 
 存活探測端點。如果程序正在執行，回傳 `200`。不需要身份驗證，不受並行限制影響。
@@ -638,6 +696,7 @@ cp .env.example .env
 | `REQUEST_TIMEOUT_SECONDS` | `300` | 整個推論管線的端對端逾時時間 |
 | `CLIP_CACHE_DIR` | `/app/models` | 模型權重下載與快取目錄。 |
 | `TEMP_DIR` | `/tmp/clipcc` | 暫存上傳和影格檔案的目錄。**Windows 原生使用者：** 須覆寫為 Windows 路徑如 `C:\temp\clipcc`。 |
+| `GEMMA_ENABLED` | `true`（CPU Docker 設定檔為 `false`） | 啟用 Gemma 4 / 混合模式插槽。只在預熱時載入，啟動時不會載入。預熱後約需 11.4 GB 顯存（GPU bf16）/ 22 GB 記憶體（CPU fp32）。完整的 `GEMMA_*` / `HYBRID_*` 調校變數請見 `.env.example`。 |
 
 ---
 
