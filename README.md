@@ -15,6 +15,8 @@ A cross-platform, Dockerized API that classifies video content against user-prov
 - **Built-in web UI** at `http://localhost:8000/` — model selector, video upload, label input, and results visualization.
 - **Three aggregation modes** — `mean` (average across frames), `max` (peak per label with timestamp), `temporal` (frame-by-frame timeline with segment detection).
 - **Sigmoid scoring** — each label gets an independent confidence score between 0 and 1. Multiple labels can score high simultaneously.
+- **Gemma 4 E2B exploration** *(optional, GPU-oriented)* — a vision-language model for open-ended Q&A and label scoring over sampled frames at the `/gemma` page. Loads on demand, off by default on CPU.
+- **Hybrid mode** *(optional)* — SigLIP2 scores every frame, then Gemma 4 verifies the top-k labels at the `/hybrid` page.
 - **Lightweight Docker image** — ~1 GB base image. Models download on demand and are cached in a Docker volume.
 - **Pre-built images** — `docker pull ghcr.io/austinjeng/clipcc:latest` for instant setup on amd64 and arm64.
 - **GPU support** — NVIDIA CUDA acceleration (10-30x faster than CPU).
@@ -71,6 +73,7 @@ cd clipCC
   - [GET /api/v1/models/active](#get-apiv1modelsactive)
   - [GET /live](#get-live)
   - [GET /ready](#get-ready)
+  - [Gemma 4 & Hybrid Mode](#gemma-4--hybrid-mode)
 - [Configuration](#configuration)
 - [Authentication](#authentication)
 - [GPU Support](#gpu-support)
@@ -657,6 +660,8 @@ Temporal mode returns a frame-by-frame timeline, detected segments where labels 
 
 ClipCC includes a built-in web interface at **http://localhost:8000/**. The web UI is optional — all features are also available via the API.
 
+Two optional exploration pages are linked from the top nav: **`/gemma`** (Gemma 4 Q&A + label scoring) and **`/hybrid`** (SigLIP2 → Gemma verification). Both require the Gemma slot — set `GEMMA_ENABLED=true` (GPU recommended) and warm it first. See [Gemma 4 & Hybrid Mode](#gemma-4--hybrid-mode).
+
 ### What you'll see
 
 - **Model selector** — dropdown with all 6 SigLIP2 models and a status indicator (green = loaded and ready)
@@ -1027,6 +1032,59 @@ Returns `404` if no model is loaded.
 
 ---
 
+### Gemma 4 & Hybrid Mode
+
+> **Optional feature, off by default on CPU.** The Gemma 4 E2B vision-language model loads **only when warmed** (never at startup) and is memory-heavy: **~11.4 GB VRAM at bf16 on GPU**, **~22 GB RAM at fp32 on CPU** (demo-only). It is disabled on the CPU Docker profiles; enable with `GEMMA_ENABLED=true` on a GPU host, then call `/api/v1/gemma/warm`. Web pages: `/gemma` and `/hybrid`.
+
+#### GET /api/v1/gemma/status
+
+Slot lifecycle and capability info — `enabled`, `state` (`unloaded` / `loading` / `loaded` / `error`), `device`, and the active `model_id`.
+
+```bash
+curl http://localhost:8000/api/v1/gemma/status
+```
+
+#### POST /api/v1/gemma/warm
+
+Trigger the one-time model load into the slot. Returns `202` with the new state, `503` if there isn't enough free memory, or `409` if a load is already in progress. Gemma and hybrid requests return `503` until the slot is `loaded`.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/gemma/warm
+```
+
+#### POST /api/v1/gemma/label_scores
+
+Score labels against frames sampled from an analysis window using Gemma (multipart form).
+
+| Field | Required | Description |
+|---|---|---|
+| `video` | yes | Video file |
+| `labels` | yes | JSON array of label strings (max `GEMMA_MAX_LABELS`) |
+| `window_start` | no | Start of the analysis window in seconds (default `0`) |
+| `instruction` | no | Extra instruction prepended to the prompt (≤2000 chars) |
+| `max_frames` | no | Frames to sample, clamped to `[1, GEMMA_MAX_FRAMES_CAP]` |
+
+#### POST /api/v1/gemma/qa
+
+Open-ended question answering over sampled frames (multipart form): `video`, `prompt` (required, ≤2000 chars), optional `window_start` and `max_frames`.
+
+#### POST /api/v1/hybrid
+
+Two-phase pipeline: SigLIP2 scores every frame, then Gemma 4 verifies the top labels (multipart form).
+
+| Field | Required | Description |
+|---|---|---|
+| `video` | yes | Video file |
+| `labels` | yes | JSON array of label strings |
+| `fps` | no | SigLIP2 sampling rate, `0.1`–`5.0` (default `1.0`) |
+| `aggregation` | no | `max` or `mean` (default `max`) |
+| `threshold` | no | Score threshold `0`–`1` (default `0.5`) |
+| `top_k` | no | Top SigLIP2 labels passed to Gemma, `1`–`GEMMA_MAX_FRAMES_CAP` (default `3`) |
+| `max_verified_labels` | no | Cap on Gemma-verified labels (default `HYBRID_MAX_VERIFIED_LABELS`) |
+| `instruction` | no | Extra instruction for the Gemma verification prompt |
+
+---
+
 ### GET /live
 
 Liveness probe. Returns `200` if the process is running. No authentication required. Not affected by concurrency limits.
@@ -1083,6 +1141,7 @@ cp .env.example .env
 | `REQUEST_TIMEOUT_SECONDS` | `300` | End-to-end timeout for the entire inference pipeline per request |
 | `CLIP_CACHE_DIR` | `/app/models` | Directory where model weights are downloaded and cached. |
 | `TEMP_DIR` | `/tmp/clipcc` | Directory for temporary upload and frame files. **Windows native users:** override to a Windows path like `C:\temp\clipcc`. |
+| `GEMMA_ENABLED` | `true` (`false` on CPU Docker profiles) | Enables the Gemma 4 / hybrid slot. Loads on warm only, never at startup. ~11.4 GB VRAM (GPU bf16) / ~22 GB RAM (CPU fp32) when warmed. See `.env.example` for the full set of `GEMMA_*` / `HYBRID_*` tuning vars. |
 
 ---
 
