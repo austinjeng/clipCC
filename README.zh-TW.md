@@ -597,7 +597,7 @@ curl http://localhost:8000/api/v1/models/active
 
 #### GET /api/v1/gemma/status
 
-插槽生命週期與能力資訊 — `enabled`、`state`（`unloaded` / `loading` / `loaded` / `error`）、`device`，以及目前的 `model_id`。
+插槽生命週期與能力資訊 — `enabled`、`state`（`idle` / `loading` / `loaded` / `failed`）、`device`，以及目前的 `model_id`。
 
 ```bash
 curl http://localhost:8000/api/v1/gemma/status

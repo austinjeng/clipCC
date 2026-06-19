@@ -1038,7 +1038,7 @@ Returns `404` if no model is loaded.
 
 #### GET /api/v1/gemma/status
 
-Slot lifecycle and capability info — `enabled`, `state` (`unloaded` / `loading` / `loaded` / `error`), `device`, and the active `model_id`.
+Slot lifecycle and capability info — `enabled`, `state` (`idle` / `loading` / `loaded` / `failed`), `device`, and the active `model_id`.
 
 ```bash
 curl http://localhost:8000/api/v1/gemma/status
