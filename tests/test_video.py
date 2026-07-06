@@ -1,6 +1,7 @@
 import subprocess
 import threading
 import pytest
+from app.errors.handlers import FFmpegMissingError
 from app.services.video import (
     FrameExtractor, FrameSample, VideoInfo,
     probe_video, validate_video_constraints,
@@ -98,3 +99,32 @@ class TestFrameExtractor:
         assert len(runner.registered) == 1
         assert isinstance(runner.registered[0], subprocess.Popen)
         assert runner.unregister_count == 1
+
+
+class TestFFmpegMissing:
+    def test_probe_names_missing_ffprobe(self, temp_dir, monkeypatch):
+        def _missing(*args, **kwargs):
+            raise FileNotFoundError(2, "No such file or directory", "ffprobe")
+
+        monkeypatch.setattr(subprocess, "run", _missing)
+        with pytest.raises(FFmpegMissingError) as exc:
+            probe_video(temp_dir / "video.mp4")
+        assert "ffprobe" in exc.value.detail
+        assert "Install ffmpeg" in exc.value.detail
+
+    def test_extract_names_missing_ffmpeg(self, temp_dir, monkeypatch):
+        def _missing(*args, **kwargs):
+            raise FileNotFoundError(2, "No such file or directory", "ffmpeg")
+
+        monkeypatch.setattr(subprocess, "Popen", _missing)
+        extractor = FrameExtractor()
+        with pytest.raises(FFmpegMissingError) as exc:
+            extractor.extract(
+                video_path=temp_dir / "video.mp4",
+                fps=1.0,
+                max_frames=10,
+                frame_dir=temp_dir,
+                cancel_event=threading.Event(),
+            )
+        assert "'ffmpeg'" in exc.value.detail
+        assert "Install ffmpeg" in exc.value.detail

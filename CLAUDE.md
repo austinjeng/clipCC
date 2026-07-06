@@ -34,7 +34,7 @@ app/
   static/
     index.html          # Web UI (model selector, upload, Chart.js viz)
     gemma.html          # Gemma 4 exploration UI (separate page, top nav)
-tests/                  # ~130 tests, pytest + pytest-asyncio
+tests/                  # ~340 tests, pytest + pytest-asyncio
 ```
 
 ## Key Routes
@@ -70,7 +70,7 @@ docker compose --profile cpu-build up   # builds local source; --profile cpu pul
 - `CLIP_CACHE_DIR` — Model download cache (default: /app/models)
 - `SKIP_MODEL_AUTOLOAD=true` — Skip model load for CI/fast startup
 - `DEFAULT_LABELS` — JSON array of preset labels for the UI (default: 3 driving behaviors)
-- `GEMMA_ENABLED` / `GEMMA_MODEL_ID` — Gemma 4 E2B slot (warm-only load; 11.4GB bf16, needs ~14GB free)
+- `GEMMA_ENABLED` / `GEMMA_MODEL_ID` — Gemma 4 E2B slot (warm-only load; bf16 on GPU/MPS needs ~14GB free, fp32 on x86 CPU needs ~26GB free — see `GEMMA_RESERVE_GB[_CPU]`)
 
 ## Scoring Semantics
 

@@ -338,3 +338,40 @@ async def test_label_scores_custom_instruction_reaches_model(app_and_slot, monke
                          data={"labels": '["texting"]', "instruction": "Custom: rate harshly."})
         assert r.status_code == 200, r.text
     assert any("Custom: rate harshly." in p for p in fake.calls)
+
+
+class TestReserveFootprint:
+    def test_cpu_reserve_uses_fp32_footprint(self, monkeypatch):
+        import torch
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+        settings = make_settings()
+        app = create_app(settings)
+        assert app.vlm_slot_for_tests._reserve_bytes == int(
+            settings.gemma_reserve_gb_cpu * 1e9
+        )
+
+    def test_gpu_reserve_uses_bf16_footprint(self, monkeypatch):
+        import torch
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+        settings = make_settings()
+        app = create_app(settings)
+        assert app.vlm_slot_for_tests._reserve_bytes == int(
+            settings.gemma_reserve_gb * 1e9
+        )
+
+    def test_mps_reserve_uses_bf16_footprint(self, monkeypatch):
+        # mps loads bf16 like cuda, but the reservation lands on the 'cpu'
+        # (host RAM) ledger — the amount must still be the bf16 footprint.
+        import torch
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+        settings = make_settings()
+        app = create_app(settings)
+        assert app.vlm_slot_for_tests._reserve_bytes == int(
+            settings.gemma_reserve_gb * 1e9
+        )
+        assert app.vlm_slot_for_tests.device == "cpu"

@@ -160,3 +160,17 @@ class InvalidGemmaParamsError(HTTPException):
 
     def __init__(self, detail: str) -> None:
         super().__init__(status_code=422, detail=detail)
+
+
+class FFmpegMissingError(HTTPException):
+    """ffmpeg/ffprobe binary not found on PATH (HTTP 500 with actionable detail
+    instead of an opaque Internal Server Error)."""
+
+    def __init__(self, binary: str) -> None:
+        super().__init__(
+            status_code=500,
+            detail=(
+                f"'{binary}' was not found on PATH. Install ffmpeg "
+                f"(https://ffmpeg.org) to process videos."
+            ),
+        )

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from app.config import Settings
@@ -146,3 +148,22 @@ def test_gemma_max_frames_clamped_to_cap():
     s = Settings(allow_unauthenticated=True, gemma_max_frames=99)
     assert s.effective_gemma_max_frames == 16
     assert Settings(allow_unauthenticated=True, gemma_max_frames=5).effective_gemma_max_frames == 5
+
+
+class TestPathExpansion:
+    def test_tilde_expanded_in_clip_cache_dir(self):
+        s = Settings(clip_cache_dir="~/.cache/clipcc_models")
+        assert s.clip_cache_dir == str(Path.home() / ".cache" / "clipcc_models")
+
+    def test_tilde_expanded_in_temp_dir(self):
+        s = Settings(temp_dir="~/clipcc-tmp")
+        assert s.temp_dir == str(Path.home() / "clipcc-tmp")
+
+    def test_absolute_paths_unchanged(self):
+        s = Settings(clip_cache_dir="/app/models", temp_dir="/tmp/clipcc")
+        assert s.clip_cache_dir == "/app/models"
+        assert s.temp_dir == "/tmp/clipcc"
+
+
+def test_gemma_cpu_reserve_default():
+    assert Settings().gemma_reserve_gb_cpu == 24.0

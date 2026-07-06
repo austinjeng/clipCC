@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 from app.config import Settings
 from app.errors.handlers import (
     DurationTooLongError,
+    FFmpegMissingError,
     InvalidGemmaParamsError,
     MultipleVideoStreamsError,
     ResolutionTooHighError,
@@ -90,7 +91,10 @@ def extract_frames(
             "-q:v", "2",
             str(out_path),
         ]
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except FileNotFoundError as e:
+            raise FFmpegMissingError("ffmpeg") from e
         if runner is not None:
             runner.register_process(proc)
         try:

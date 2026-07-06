@@ -1269,22 +1269,33 @@ python -m pytest tests/ -v
 
 | Test File | Tests | What It Covers |
 |---|---|---|
-| `test_api.py` | 28 | Full integration (health, validation, classify, contrast) |
+| `test_api.py` | 35 | Full integration (health, validation, classify, contrast) |
 | `test_base_model.py` | 2 | BaseModel abstraction contract |
-| `test_config.py` | 14 | Settings validation, auth config |
+| `test_config.py` | 24 | Settings validation, auth config, path expansion |
 | `test_download_script.py` | 7 | Model download script |
 | `test_frame_timeline.py` | 9 | Frame intervals, timestamps, gap/duration math |
+| `test_gemma_api.py` | 21 | Gemma endpoints (status, warm, label_scores, qa), memory reserve |
+| `test_gemma_integration.py` | 4 | Gated real-model Gemma tests (`GEMMA_INTEGRATION=1`) |
+| `test_gemma_prompts.py` | 22 | Gemma prompt build, strict ID-keyed parsing |
+| `test_gemma_sampler.py` | 14 | Analysis window, timestamp planning, frame seeks |
+| `test_gemma_verdict.py` | 8 | Hybrid verdict prompt and parse |
+| `test_hybrid_api.py` | 6 | Hybrid endpoint validation and flow |
+| `test_hybrid_integration.py` | 1 | Gated hybrid end-to-end test |
+| `test_hybrid_middleware.py` | 4 | Hybrid route gating |
+| `test_hybrid_select.py` | 7 | Label gating/ranking, top-k frame spread selection |
 | `test_inference_runner.py` | 5 | Timeout, cancellation, worker teardown |
 | `test_integration.py` | 1 | End-to-end integration flow |
-| `test_middleware.py` | 12 | Auth, upload gates, body size |
-| `test_model_manager.py` | 40 | Model registry, hot-swap, lease concurrency |
-| `test_resource_gates.py` | 10 | Concurrency limiters |
-| `test_scoring.py` | 36 | Mean/max/temporal/contrast aggregation, scoring context |
+| `test_middleware.py` | 21 | Auth, upload gates, body size |
+| `test_model_manager.py` | 44 | Model registry, hot-swap, lease concurrency, non-blocking load |
+| `test_residency.py` | 11 | Residency ledger reserve/commit/rollback |
+| `test_resource_gates.py` | 7 | Concurrency limiters |
+| `test_scoring.py` | 37 | Mean/max/temporal/contrast aggregation, scoring context |
 | `test_siglip2_model.py` | 10 | SigLIP2 model loading, sigmoid scoring |
-| `test_temp_store.py` | 5 | File upload, cleanup, janitor |
+| `test_temp_store.py` | 6 | File upload, cleanup, janitor |
 | `test_temporal_policy.py` | 6 | Scoring policy, threshold mode |
-| `test_video.py` | 10 | ffprobe, validation, frame extraction |
-| **Total** | **195** | |
+| `test_video.py` | 12 | ffprobe, validation, frame extraction, missing-ffmpeg errors |
+| `test_vlm_slot.py` | 14 | VLM slot state machine, warm lifecycle |
+| **Total** | **338** | |
 
 ---
 
@@ -1307,21 +1318,31 @@ clipCC/
 │   ├── models/
 │   │   ├── base_model.py       # Abstract base class for all model backends
 │   │   ├── siglip2_model.py    # SigLIP2 model via HuggingFace transformers (sigmoid scoring)
-│   │   └── model_manager.py    # Model registry, hot-swap with lease-based concurrency
+│   │   ├── model_manager.py    # Model registry, hot-swap with lease-based concurrency
+│   │   ├── residency.py        # Per-device atomic model-memory ledger
+│   │   ├── vlm_slot.py         # Gemma load-once state machine (warm-only)
+│   │   └── gemma_vlm.py        # Gemma 4 E2B wrapper
 │   ├── services/
 │   │   ├── video.py            # ffprobe validation and ffmpeg frame extraction
 │   │   ├── scoring.py          # Mean/max/temporal/contrast aggregation over frame scores
 │   │   ├── frame_timeline.py   # Frame interval math for temporal mode
-│   │   └── temporal_policy.py  # SigLIP2 scoring policy (threshold behavior)
+│   │   ├── temporal_policy.py  # SigLIP2 scoring policy (threshold behavior)
+│   │   ├── gemma_sampler.py    # Timestamp-seek frame sampling for Gemma
+│   │   ├── gemma_prompts.py    # Gemma prompt build + strict ID-keyed parse
+│   │   └── hybrid_select.py    # Hybrid label gating and top-k frame selection
 │   ├── schemas/
-│   │   └── response.py         # Pydantic response models
+│   │   ├── response.py         # Pydantic response models
+│   │   ├── gemma.py            # Gemma response models
+│   │   └── hybrid.py           # Hybrid response models
 │   ├── errors/
 │   │   └── handlers.py         # Custom HTTP exceptions
 │   └── static/
 │       ├── index.html          # Web UI (model selector, temporal controls, chart visualization)
+│       ├── gemma.html          # Gemma 4 exploration UI
+│       ├── hybrid.html         # Hybrid mode UI
 │       └── vendor/
 │           └── chart.min.js    # Chart.js 4.4.9 for temporal timeline rendering
-└── tests/                      # 130 tests across 15 files
+└── tests/                      # 338 tests across 26 files
 ```
 
 ---

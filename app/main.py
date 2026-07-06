@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import shutil
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -126,6 +127,18 @@ class LoadModelRequest(PydanticBaseModel):
     model_id: str
 
 
+def _configure_app_logging() -> None:
+    # Uvicorn configures only its own loggers; without a handler here the
+    # startup lines the README tells users to wait for (e.g. "Auto-loaded
+    # model: ...") are never printed.
+    app_logger = logging.getLogger("app")
+    if not app_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s:     %(message)s"))
+        app_logger.addHandler(handler)
+        app_logger.setLevel(logging.INFO)
+
+
 def _parse_label_array(raw: str, field_name: str) -> list[str]:
     try:
         parsed = json.loads(raw)
@@ -159,6 +172,7 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
         settings = Settings()
 
     settings.validate_auth_config()
+    _configure_app_logging()
 
     ledger = ResidencyLedger(headroom_gb=settings.residency_headroom_gb)
 
@@ -177,11 +191,19 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
             return "cuda:0"
         return "cpu"  # mps draws from host RAM; ledger treats both as host memory
 
+    def _gemma_reserve_gb() -> float:
+        # Mirrors gemma_vlm.pick_device_and_dtype: cuda/mps load bf16, but x86
+        # CPU falls back to fp32 (~2x the footprint) — reserve accordingly so
+        # the warm gate refuses instead of OOM-ing mid-load.
+        if torch.cuda.is_available() or torch.backends.mps.is_available():
+            return settings.gemma_reserve_gb
+        return settings.gemma_reserve_gb_cpu
+
     vlm_slot = VlmSlot(
         loader=_gemma_loader,
         ledger=ledger,
         device=_gemma_device(),
-        reserve_bytes=int(settings.gemma_reserve_gb * 1e9),
+        reserve_bytes=int(_gemma_reserve_gb() * 1e9),
         enabled=settings.gemma_enabled,
     )
 
@@ -194,6 +216,12 @@ def create_app(settings: Optional[Settings] = None) -> RequestGateMiddleware:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        for binary in ("ffmpeg", "ffprobe"):
+            if shutil.which(binary) is None:
+                logger.warning(
+                    f"'{binary}' not found on PATH — video endpoints will fail "
+                    f"until ffmpeg is installed (https://ffmpeg.org)."
+                )
         manager = ModelManager(
             cache_dir=settings.clip_cache_dir,
             offline=settings.clipcc_offline,

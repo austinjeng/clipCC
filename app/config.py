@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from pydantic_settings import BaseSettings
 from pydantic import Field, field_validator
 
@@ -41,9 +43,19 @@ class Settings(BaseSettings):
     hybrid_thumbnail_px: int = 160
     # 11.4 GB bf16 weights + KV/activations margin; reserved in the residency ledger
     gemma_reserve_gb: float = 12.0
+    # x86 CPU falls back to fp32 (~22 GB resident, see gemma_vlm.pick_device_and_dtype);
+    # reserving only the bf16 footprint would pass the gate and then OOM mid-load.
+    gemma_reserve_gb_cpu: float = 24.0
     residency_headroom_gb: float = 2.0
 
     model_config = {"env_prefix": "", "env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
+
+    @field_validator("clip_cache_dir", "temp_dir", mode="after")
+    @classmethod
+    def _expand_user_path(cls, v: str) -> str:
+        # .env values are never shell-expanded; without this, a configured
+        # '~/.cache/...' becomes a literal CWD-relative directory named '~'.
+        return os.path.expanduser(v)
 
     @field_validator("api_key", mode="after")
     @classmethod

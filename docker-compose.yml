@@ -1,7 +1,9 @@
 services:
   clipcc-cpu:
     image: ghcr.io/austinjeng/clipcc:latest
-    pull_policy: always
+    # 'missing' keeps `up` working offline once the image is cached;
+    # refresh manually with: docker compose --profile cpu pull
+    pull_policy: missing
     ports:
       - "8000:8000"
     volumes:

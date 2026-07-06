@@ -1,5 +1,6 @@
 import asyncio
 import json
+import time
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -585,3 +586,30 @@ def test_check_resources_passes_without_reservations(monkeypatch, tmp_path):
         hf_repo="x/big", params="2B", resolution=384, min_ram_gb=10,
     )
     manager._check_resources(config)  # must not raise
+
+
+class TestLoadModelEventLoop:
+    async def test_load_does_not_block_event_loop(self, manager):
+        # The blocking constructor must run in a worker thread: the event loop
+        # (and /live, /ready) has to stay responsive during a slow model load.
+        with patch("app.models.model_manager.SigLip2Model") as MockModel:
+            def slow_constructor(**kwargs):
+                time.sleep(0.5)
+                return MagicMock()
+
+            MockModel.side_effect = slow_constructor
+
+            ticks = 0
+
+            async def heartbeat():
+                nonlocal ticks
+                while True:
+                    await asyncio.sleep(0.02)
+                    ticks += 1
+
+            hb = asyncio.create_task(heartbeat())
+            try:
+                await manager.load_model("siglip2-base-patch16-256")
+            finally:
+                hb.cancel()
+            assert ticks >= 5

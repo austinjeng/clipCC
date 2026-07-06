@@ -781,22 +781,33 @@ python -m pytest tests/ -v
 
 | 測試檔案 | 測試數 | 涵蓋範圍 |
 |---|---|---|
-| `test_api.py` | 28 | 完整整合測試（健康檢查、驗證、分類、對比） |
+| `test_api.py` | 35 | 完整整合測試（健康檢查、驗證、分類、對比） |
 | `test_base_model.py` | 2 | BaseModel 抽象類別契約 |
-| `test_config.py` | 14 | 設定驗證、身份驗證組態 |
+| `test_config.py` | 24 | 設定驗證、身份驗證組態、路徑展開 |
 | `test_download_script.py` | 7 | 模型下載腳本 |
 | `test_frame_timeline.py` | 9 | 影格間隔、時間戳記、間隔/時長計算 |
+| `test_gemma_api.py` | 21 | Gemma 端點（status、warm、label_scores、qa）、記憶體保留 |
+| `test_gemma_integration.py` | 4 | 真實模型 Gemma 測試（需 `GEMMA_INTEGRATION=1`） |
+| `test_gemma_prompts.py` | 22 | Gemma 提示詞建構、嚴格 ID 鍵值解析 |
+| `test_gemma_sampler.py` | 14 | 分析視窗、時間戳記規劃、影格定位擷取 |
+| `test_gemma_verdict.py` | 8 | Hybrid 判定提示詞與解析 |
+| `test_hybrid_api.py` | 6 | Hybrid 端點驗證與流程 |
+| `test_hybrid_integration.py` | 1 | Hybrid 端對端測試（需真實模型） |
+| `test_hybrid_middleware.py` | 4 | Hybrid 路由閘門 |
+| `test_hybrid_select.py` | 7 | 標籤閘門/排序、top-k 影格分散選取 |
 | `test_inference_runner.py` | 5 | 逾時處理、取消機制、工作執行緒收尾 |
 | `test_integration.py` | 1 | 端對端整合流程 |
-| `test_middleware.py` | 12 | 身份驗證、上傳閘門、請求大小 |
-| `test_model_manager.py` | 40 | 模型註冊、熱切換、租約並行 |
-| `test_resource_gates.py` | 10 | 並行限制器 |
-| `test_scoring.py` | 36 | Mean/Max/Temporal/對比聚合、評分上下文 |
+| `test_middleware.py` | 21 | 身份驗證、上傳閘門、請求大小 |
+| `test_model_manager.py` | 44 | 模型註冊、熱切換、租約並行、非阻塞載入 |
+| `test_residency.py` | 11 | 記憶體帳本 reserve/commit/rollback |
+| `test_resource_gates.py` | 7 | 並行限制器 |
+| `test_scoring.py` | 37 | Mean/Max/Temporal/對比聚合、評分上下文 |
 | `test_siglip2_model.py` | 10 | SigLIP2 模型載入、sigmoid 評分 |
-| `test_temp_store.py` | 5 | 檔案上傳、清理、定時清除 |
+| `test_temp_store.py` | 6 | 檔案上傳、清理、定時清除 |
 | `test_temporal_policy.py` | 6 | 評分策略、閾值模式 |
-| `test_video.py` | 10 | ffprobe 驗證、影格擷取 |
-| **總計** | **195** | |
+| `test_video.py` | 12 | ffprobe 驗證、影格擷取、ffmpeg 缺失錯誤 |
+| `test_vlm_slot.py` | 14 | VLM 插槽狀態機、warm 生命週期 |
+| **總計** | **338** | |
 
 ---
 
@@ -819,21 +830,31 @@ clipCC/
 │   ├── models/
 │   │   ├── base_model.py       # 所有模型後端的抽象基礎類別
 │   │   ├── siglip2_model.py    # SigLIP2 模型，使用 HuggingFace transformers（sigmoid 評分）
-│   │   └── model_manager.py    # 模型註冊表、熱切換與租約式並行控制
+│   │   ├── model_manager.py    # 模型註冊表、熱切換與租約式並行控制
+│   │   ├── residency.py        # 各裝置原子性模型記憶體帳本
+│   │   ├── vlm_slot.py         # Gemma 單次載入狀態機（僅 warm）
+│   │   └── gemma_vlm.py        # Gemma 4 E2B 封裝
 │   ├── services/
 │   │   ├── video.py            # ffprobe 驗證與 ffmpeg 影格擷取
 │   │   ├── scoring.py          # Mean/Max/Temporal/對比聚合
 │   │   ├── frame_timeline.py   # 時序模式的影格間隔計算
-│   │   └── temporal_policy.py  # SigLIP2 評分策略（閾值行為）
+│   │   ├── temporal_policy.py  # SigLIP2 評分策略（閾值行為）
+│   │   ├── gemma_sampler.py    # Gemma 時間戳記定位影格取樣
+│   │   ├── gemma_prompts.py    # Gemma 提示詞建構與嚴格 ID 鍵值解析
+│   │   └── hybrid_select.py    # Hybrid 標籤閘門與 top-k 影格選取
 │   ├── schemas/
-│   │   └── response.py         # Pydantic 回應模型
+│   │   ├── response.py         # Pydantic 回應模型
+│   │   ├── gemma.py            # Gemma 回應模型
+│   │   └── hybrid.py           # Hybrid 回應模型
 │   ├── errors/
 │   │   └── handlers.py         # 自訂 HTTP 例外
 │   └── static/
 │       ├── index.html          # 網頁 UI（模型選擇器、時序控制、Chart.js 視覺化）
+│       ├── gemma.html          # Gemma 4 探索 UI
+│       ├── hybrid.html         # Hybrid 模式 UI
 │       └── vendor/
 │           └── chart.min.js    # Chart.js 4.4.9，用於時序時間軸渲染
-└── tests/                      # 15 個測試檔案，共 130 個測試
+└── tests/                      # 26 個測試檔案，共 338 個測試
 ```
 
 ---

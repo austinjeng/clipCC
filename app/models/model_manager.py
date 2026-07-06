@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncGenerator
 
+import anyio
 import psutil
 import torch
 
@@ -186,13 +187,21 @@ class ModelManager:
             del old_model
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            new_model = SigLip2Model(
-                hf_repo=config.hf_repo,
-                cache_dir=self.cache_dir,
-                revision=config.revision,
-                offline=self._offline,
+            # Blocking HF download + weight load runs in a worker thread so the
+            # event loop (and /live, /ready) stays responsive during multi-minute
+            # first-run downloads and hot-swaps.
+            new_model = await anyio.to_thread.run_sync(
+                lambda: SigLip2Model(
+                    hf_repo=config.hf_repo,
+                    cache_dir=self.cache_dir,
+                    revision=config.revision,
+                    offline=self._offline,
+                )
             )
-        except Exception:
+        except BaseException:
+            # BaseException, not Exception: the await above makes this window
+            # cancellable, and a CancelledError that skipped the reset would
+            # strand _swapping=True forever (every acquire would then time out).
             async with self._condition:
                 self._swapping = False
                 self._condition.notify_all()

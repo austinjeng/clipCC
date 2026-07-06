@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 from app.config import Settings
 from app.errors.handlers import (
     DurationTooLongError,
+    FFmpegMissingError,
     MultipleVideoStreamsError,
     ResolutionTooHighError,
     TooManyFramesError,
@@ -45,6 +46,8 @@ def probe_video(video_path: Path, timeout: int = 30) -> VideoInfo:
     ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError as e:
+        raise FFmpegMissingError("ffprobe") from e
     except subprocess.TimeoutExpired as e:
         raise RuntimeError(f"ffprobe timed out after {timeout}s") from e
 
@@ -128,6 +131,8 @@ class FrameExtractor:
             if runner is not None:
                 runner.register_process(proc)
             _, stderr = proc.communicate(timeout=self.ffmpeg_timeout)
+        except FileNotFoundError as e:
+            raise FFmpegMissingError("ffmpeg") from e
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
