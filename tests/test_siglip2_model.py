@@ -11,11 +11,13 @@ def dummy_images():
     return [Image.new("RGB", (256, 256), color=(i * 30, 100, 200)) for i in range(3)]
 
 
-@pytest.fixture
-def model(temp_dir):
+@pytest.fixture(scope="module")
+def model(tmp_path_factory):
+    # Module-scoped: the constructor downloads the full ~1.5 GB model into
+    # cache_dir, so a function-scoped fixture re-downloads it once per test.
     return SigLip2Model(
         hf_repo="google/siglip2-base-patch16-256",
-        cache_dir=str(temp_dir / "models"),
+        cache_dir=str(tmp_path_factory.mktemp("models")),
     )
 
 

@@ -32,7 +32,7 @@ docker run -p 8000:8000 -e ALLOW_UNAUTHENTICATED=true \
   -v clipcc-models:/app/models ghcr.io/austinjeng/clipcc:latest
 ```
 
-Open `http://localhost:8000` in your browser. The default model (~800 MB) downloads automatically on first start.
+Open `http://localhost:8000` in your browser. The default model (~1.5 GB) downloads automatically on first start.
 
 **Production deployment** (use `--env-file` to keep secrets out of shell history):
 
@@ -102,7 +102,7 @@ ClipCC ships with 6 SigLIP2 models. The default model auto-loads at startup and 
 - **API:** `POST /api/v1/models/load` with `{"model_id": "siglip2-large-patch16-384"}`
 - **Startup default:** Set `DEFAULT_MODEL_ID` environment variable
 
-Models are downloaded from HuggingFace on first use (~800 MB for base models, ~2 GB for large/SO400M models) and cached for future runs.
+Models are downloaded from HuggingFace on first use (~1.5 GB for base models, ~3.5-4.5 GB for large/SO400M models) and cached for future runs.
 
 ---
 
@@ -139,18 +139,20 @@ docker compose version
 **Step 2: Build the image**
 
 ```powershell
-docker compose --profile cpu build
+docker compose --profile cpu-build build
 ```
 
 The first build takes **5-10 minutes**. It downloads Python, ffmpeg, PyTorch, and supporting libraries. Model weights are downloaded separately on first startup, not during the build.
 
+> **Skip the build:** to run the prebuilt image instead, use `docker compose --profile cpu up` — it pulls `ghcr.io/austinjeng/clipcc:latest`. Note that the prebuilt image does **not** include any local source changes; use the `cpu-build` profile above to run your own code.
+
 **Step 3: Start the server**
 
 ```powershell
-docker compose --profile cpu up
+docker compose --profile cpu-build up
 ```
 
-On first startup, the default model (`siglip2-base-patch16-256`, ~800 MB) downloads automatically. This happens once — the Docker volume caches it for future runs.
+On first startup, the default model (`siglip2-base-patch16-256`, ~1.5 GB) downloads automatically. This happens once — the Docker volume caches it for future runs.
 
 Wait for:
 ```
@@ -174,7 +176,7 @@ Open **http://localhost:8000/** in your browser to access the web UI.
 **Step 5: Stop the server**
 
 ```powershell
-docker compose --profile cpu down
+docker compose --profile cpu-build down
 ```
 
 Model weights persist in the Docker volume — they won't need to re-download next time.
@@ -228,7 +230,7 @@ $env:CLIP_CACHE_DIR = "C:\temp\clipcc_models"
 uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000
 ```
 
-On first startup, the default model (`siglip2-base-patch16-256`, ~800 MB) downloads automatically. Subsequent starts use the cached model.
+On first startup, the default model (`siglip2-base-patch16-256`, ~1.5 GB) downloads automatically. Subsequent starts use the cached model.
 
 **Step 4: Verify**
 
@@ -281,20 +283,22 @@ docker compose version
 **Step 2: Build the image**
 
 ```bash
-docker compose --profile cpu build
+docker compose --profile cpu-build build
 ```
 
 The first build takes **5-10 minutes**. It downloads Python, ffmpeg, PyTorch, and supporting libraries. Model weights are downloaded separately on first startup, not during the build.
+
+> **Skip the build:** to run the prebuilt image instead, use `docker compose --profile cpu up` — it pulls `ghcr.io/austinjeng/clipcc:latest`. Note that the prebuilt image does **not** include any local source changes; use the `cpu-build` profile above to run your own code.
 
 > **Apple Silicon note:** The image builds for `linux/arm64` and runs via Docker's Linux VM. PyTorch CPU inference works well on Apple Silicon through this layer. Native Metal/MPS acceleration is not available inside Docker — use the native option below if you want MPS.
 
 **Step 3: Start the server**
 
 ```bash
-docker compose --profile cpu up
+docker compose --profile cpu-build up
 ```
 
-On first startup, the default model (`siglip2-base-patch16-256`, ~800 MB) downloads automatically. This happens once — the Docker volume caches it for future runs.
+On first startup, the default model (`siglip2-base-patch16-256`, ~1.5 GB) downloads automatically. This happens once — the Docker volume caches it for future runs.
 
 Wait for:
 ```
@@ -318,7 +322,7 @@ Open **http://localhost:8000/** in your browser to access the web UI.
 **Step 5: Stop the server**
 
 ```bash
-docker compose --profile cpu down
+docker compose --profile cpu-build down
 ```
 
 Model weights persist in the Docker volume — they won't need to re-download next time.
@@ -375,7 +379,7 @@ CLIP_CACHE_DIR=$HOME/.cache/clipcc_models \
 uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000
 ```
 
-On first startup, the default model (`siglip2-base-patch16-256`, ~800 MB) downloads automatically. Subsequent starts use the cached model.
+On first startup, the default model (`siglip2-base-patch16-256`, ~1.5 GB) downloads automatically. Subsequent starts use the cached model.
 
 **Step 4: Verify**
 
@@ -431,18 +435,20 @@ docker compose version
 **Step 2: Build the image**
 
 ```bash
-docker compose --profile cpu build
+docker compose --profile cpu-build build
 ```
 
 The first build takes **5-10 minutes**. It downloads Python, ffmpeg, PyTorch, and supporting libraries. Model weights are downloaded separately on first startup, not during the build.
 
+> **Skip the build:** to run the prebuilt image instead, use `docker compose --profile cpu up` — it pulls `ghcr.io/austinjeng/clipcc:latest`. Note that the prebuilt image does **not** include any local source changes; use the `cpu-build` profile above to run your own code.
+
 **Step 3: Start the server**
 
 ```bash
-docker compose --profile cpu up
+docker compose --profile cpu-build up
 ```
 
-On first startup, the default model (`siglip2-base-patch16-256`, ~800 MB) downloads automatically. This happens once — the Docker volume caches it for future runs.
+On first startup, the default model (`siglip2-base-patch16-256`, ~1.5 GB) downloads automatically. This happens once — the Docker volume caches it for future runs.
 
 Wait for:
 ```
@@ -466,7 +472,7 @@ Open **http://localhost:8000/** in your browser to access the web UI.
 **Step 5: Stop the server**
 
 ```bash
-docker compose --profile cpu down
+docker compose --profile cpu-build down
 ```
 
 Model weights persist in the Docker volume — they won't need to re-download next time.
@@ -528,7 +534,7 @@ CLIP_CACHE_DIR=$HOME/.cache/clipcc_models \
 uvicorn app.main:create_app --factory --host 0.0.0.0 --port 8000
 ```
 
-On first startup, the default model (`siglip2-base-patch16-256`, ~800 MB) downloads automatically. Subsequent starts use the cached model.
+On first startup, the default model (`siglip2-base-patch16-256`, ~1.5 GB) downloads automatically. Subsequent starts use the cached model.
 
 **Step 4: Verify**
 
@@ -1200,7 +1206,7 @@ GPU acceleration dramatically improves inference speed (10-30x faster than CPU).
 |---|---|
 | **Linux (Docker)** | Full support. Install [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html). |
 | **Windows (Docker)** | Supported via WSL2 backend. Docker Desktop automatically passes through the GPU. |
-| **Windows (Native)** | Works if CUDA-compatible PyTorch is installed: `pip install torch --index-url https://download.pytorch.org/whl/cu121` |
+| **Windows (Native)** | Works if CUDA-compatible PyTorch is installed: `pip install --force-reinstall torch torchvision --index-url https://download.pytorch.org/whl/cu126` (run after `pip install -r requirements.txt`, which installs the CPU build) |
 | **macOS (Docker)** | Not supported. Docker on macOS runs a Linux VM without GPU passthrough. |
 | **macOS (Native)** | PyTorch MPS (Apple Silicon) may work but is untested with SigLIP2 models. CPU is the safe default. |
 
@@ -1223,7 +1229,7 @@ curl http://localhost:8000/ready
 # {"status":"ready","model":"siglip2-so400m-patch14-384",...,"device":"cuda"}
 ```
 
-If `device` says `"cuda"`, GPU acceleration is active. If it says `"cpu"`, check that NVIDIA Container Toolkit is installed and Docker can see your GPU: `docker run --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi`.
+If `device` says `"cuda"`, GPU acceleration is active. If it says `"cpu"`, check that NVIDIA Container Toolkit is installed and Docker can see your GPU: `docker run --gpus all nvidia/cuda:12.6.3-base-ubuntu22.04 nvidia-smi`.
 
 ---
 
@@ -1249,7 +1255,7 @@ Run unit tests (no ffmpeg or model download needed):
 python -m pytest tests/test_config.py tests/test_temp_store.py tests/test_scoring.py tests/test_resource_gates.py tests/test_frame_timeline.py tests/test_temporal_policy.py -v
 ```
 
-Run the full suite (requires ffmpeg in PATH; first run downloads the default model ~800 MB):
+Run the full suite (requires ffmpeg in PATH; downloads the default model, ~1.5 GB, into a pytest temp dir once per run):
 ```bash
 python -m pytest tests/ -v
 ```
@@ -1437,7 +1443,7 @@ A: Not via Docker (macOS Docker runs a Linux VM without GPU passthrough). Native
 A: Add your user to the `docker` group: `sudo usermod -aG docker $USER`, then log out and back in. Or prefix commands with `sudo`.
 
 **Q: How do I set up GPU passthrough on Linux?**
-A: Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html), then restart Docker: `sudo systemctl restart docker`. Verify with: `docker run --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi`.
+A: Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html), then restart Docker: `sudo systemctl restart docker`. Verify with: `docker run --gpus all nvidia/cuda:12.6.3-base-ubuntu22.04 nvidia-smi`.
 
 ### Docker (All Platforms)
 

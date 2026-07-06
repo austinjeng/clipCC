@@ -43,7 +43,7 @@ services:
     build:
       context: .
       args:
-        TORCH_VARIANT: cu121
+        TORCH_VARIANT: cu126
     ports:
       - "8000:8000"
     volumes:

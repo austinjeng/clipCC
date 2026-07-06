@@ -56,11 +56,11 @@ ALLOW_UNAUTHENTICATED=true uvicorn app.main:create_app --factory --host 127.0.0.
 # Tests (no model needed for unit tests)
 python -m pytest tests/test_scoring.py tests/test_config.py -v
 
-# Full suite (downloads ~800MB model on first run, needs ffmpeg)
+# Full suite (downloads ~1.5GB model once per run, needs ffmpeg)
 python -m pytest tests/ -v
 
 # Docker
-docker compose --profile cpu up
+docker compose --profile cpu-build up   # builds local source; --profile cpu pulls the published image
 ```
 
 ## Key Env Vars

@@ -66,7 +66,7 @@ ClipCC 內建 6 個 SigLIP2 模型。預設模型會在啟動時自動載入，�
 - **API：** `POST /api/v1/models/load`，傳入 `{"model_id": "siglip2-large-patch16-384"}`
 - **啟動預設：** 設定 `DEFAULT_MODEL_ID` 環境變數
 
-模型首次使用時從 HuggingFace 下載（基礎模型約 800 MB，大型/SO400M 模型約 2 GB），之後快取供未來使用。
+模型首次使用時從 HuggingFace 下載（基礎模型約 1.5 GB，大型/SO400M 模型約 3.5-4.5 GB），之後快取供未來使用。
 
 ---
 
@@ -82,7 +82,7 @@ docker run -p 8000:8000 -e ALLOW_UNAUTHENTICATED=true \
   -v clipcc-models:/app/models ghcr.io/austinjeng/clipcc:latest
 ```
 
-開啟 `http://localhost:8000`。預設模型（約 800 MB）會在首次啟動時自動下載。
+開啟 `http://localhost:8000`。預設模型（約 1.5 GB）會在首次啟動時自動下載。
 
 **正式部署**（使用 `--env-file` 避免密鑰留在 shell 歷史紀錄中）：
 
@@ -107,18 +107,20 @@ cd clipCC
 ### 2. 建置 Docker 映像檔（CPU 版本）
 
 ```bash
-docker compose --profile cpu build
+docker compose --profile cpu-build build
 ```
 
 首次建置需要 **5-10 分鐘**，會下載 Python、ffmpeg、PyTorch 及相關函式庫。模型權重會在首次啟動時另外下載，不包含在建置中。
 
+> **跳過建置：** 若要直接使用預建映像，改用 `docker compose --profile cpu up` — 它會拉取 `ghcr.io/austinjeng/clipcc:latest`。注意預建映像**不包含**你本地的原始碼修改；要執行自己的程式碼請使用上面的 `cpu-build` 設定檔。
+
 ### 3. 啟動伺服器
 
 ```bash
-docker compose --profile cpu up
+docker compose --profile cpu-build up
 ```
 
-首次啟動時，預設模型（`siglip2-base-patch16-256`，約 800 MB）會自動下載。此過程只需執行一次，Docker 磁碟區會快取模型以供後續使用。
+首次啟動時，預設模型（`siglip2-base-patch16-256`，約 1.5 GB）會自動下載。此過程只需執行一次，Docker 磁碟區會快取模型以供後續使用。
 
 等待出現以下日誌訊息：
 ```
@@ -206,7 +208,7 @@ curl -X POST http://localhost:8000/api/v1/classify \
 ### 6. 停止伺服器
 
 ```bash
-docker compose --profile cpu down
+docker compose --profile cpu-build down
 ```
 
 模型權重保存在 Docker 磁碟區中，下次啟動不需要重新下載。
@@ -756,7 +758,7 @@ curl http://localhost:8000/ready
 # {"status":"ready","model":"siglip2-so400m-patch14-384",...,"device":"cuda"}
 ```
 
-如果 `device` 顯示 `"cuda"`，表示 GPU 加速已啟用。如果顯示 `"cpu"`，請檢查 NVIDIA Container Toolkit 是否已安裝，以及 Docker 是否能偵測到 GPU：`docker run --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi`。
+如果 `device` 顯示 `"cuda"`，表示 GPU 加速已啟用。如果顯示 `"cpu"`，請檢查 NVIDIA Container Toolkit 是否已安裝，以及 Docker 是否能偵測到 GPU：`docker run --gpus all nvidia/cuda:12.6.3-base-ubuntu22.04 nvidia-smi`。
 
 ---
 
@@ -771,7 +773,7 @@ pip install pytest pytest-asyncio httpx anyio trio
 python -m pytest tests/test_config.py tests/test_temp_store.py tests/test_scoring.py \
   tests/test_resource_gates.py tests/test_frame_timeline.py tests/test_temporal_policy.py -v
 
-# 執行所有測試（需要 PATH 中有 ffmpeg，首次執行會下載預設模型約 800 MB）
+# 執行所有測試（需要 PATH 中有 ffmpeg，每輪執行會下載預設模型約 1.5 GB 至 pytest 暫存目錄）
 python -m pytest tests/ -v
 ```
 

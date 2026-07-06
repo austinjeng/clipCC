@@ -12,7 +12,7 @@ LABEL org.opencontainers.image.description="Video classification API using SigLI
 COPY requirements-prod.txt .
 
 ARG TORCH_VARIANT=cpu
-# Install torch + torchvision from the variant index (cpu/cu121). Both pins MUST
+# Install torch + torchvision from the variant index (cpu/cu126). Both pins MUST
 # match requirements-prod.txt AND come from the same index: variant wheels report
 # e.g. 2.12.0+cpu / 0.27.0+cpu, so the next step treats them as already present
 # and does not overwrite them with default-PyPI (CUDA) wheels.
